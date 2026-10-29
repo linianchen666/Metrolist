@@ -1,0 +1,3360 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 0f331cf0..df15b62a 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -40,6 +40,7 @@ android {
+         applicationId = applicationIdOverride ?: baseApplicationId
+         minSdk = 26
+         targetSdk = 36
++        manifestPlaceholders["watchRequired"] = System.getenv("METROLIST_WEAR_ONLY") == "true"
+         versionCode = 153
+         versionName = "13.7.0"
+         val baseVersionName = requireNotNull(versionName)
+@@ -185,6 +186,10 @@ android {
+         generateLocaleConfig = true
+     }
+ 
++    testOptions {
++        unitTests.isIncludeAndroidResources = true
++    }
++
+     packaging {
+         jniLibs {
+             useLegacyPackaging = false
+@@ -231,6 +236,11 @@ ksp {
+     arg("room.schemaLocation", "$projectDir/schemas")
+ }
+ 
++tasks.withType<Test>().configureEach {
++    // Robolectric's Android 17 runtime accesses FileDescriptor through SharedSecrets on JDK 21.
++    jvmArgs("--add-exports=java.base/jdk.internal.access=ALL-UNNAMED")
++}
++
+ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+     compilerOptions {
+         freeCompilerArgs.addAll(
+@@ -319,4 +329,7 @@ dependencies {
+     testImplementation(libs.robolectric)
+     testImplementation(libs.androidx.test.core)
+     testImplementation(libs.ktor.client.mock)
++    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:${libs.versions.coroutinesGuava.get()}")
++    testImplementation("androidx.compose.ui:ui-test-junit4:${libs.versions.compose.get()}")
++    debugImplementation("androidx.compose.ui:ui-test-manifest:${libs.versions.compose.get()}")
+ }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 369a2b15..6bce01dc 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -20,6 +20,7 @@
+     <!-- Android TV -->
+     <uses-feature android:name="android.software.leanback" android:required="false" />
+     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
++    <uses-feature android:name="android.hardware.type.watch" android:required="${watchRequired}" />
+ 
+     <queries>
+         <intent>
+@@ -45,6 +46,9 @@
+         <uses-library
+             android:name="org.apache.http.legacy"
+             android:required="false" />
++        <meta-data
++            android:name="com.google.android.wearable.standalone"
++            android:value="true" />
+ 
+         <activity
+             android:name=".ui.screens.CrashActivity"
+diff --git a/app/src/main/kotlin/com/metrolist/music/MainActivity.kt b/app/src/main/kotlin/com/metrolist/music/MainActivity.kt
+index 038ff5b6..7b18d9f5 100644
+--- a/app/src/main/kotlin/com/metrolist/music/MainActivity.kt
++++ b/app/src/main/kotlin/com/metrolist/music/MainActivity.kt
+@@ -469,6 +469,16 @@ class MainActivity : FragmentActivity() {
+         }
+ 
+         setContent {
++            if (packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) {
++                MetrolistTheme(darkTheme = true, pureBlack = true) {
++                    com.metrolist.music.ui.screens.watch.WatchApp(
++                        playerConnection = playerConnectionSnapshot,
++                        database = database,
++                        downloadUtil = downloadUtil,
++                    )
++                }
++                return@setContent
++            }
+             MetrolistApp(
+                 latestVersionName = latestVersionName,
+                 onLatestVersionNameChange = { latestVersionName = it },
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/component/SpeedDialGridItem.kt b/app/src/main/kotlin/com/metrolist/music/ui/component/SpeedDialGridItem.kt
+deleted file mode 100644
+index d12be814..00000000
+--- a/app/src/main/kotlin/com/metrolist/music/ui/component/SpeedDialGridItem.kt
++++ /dev/null
+@@ -1,115 +0,0 @@
+-package com.metrolist.music.ui.component
+-
+-import androidx.compose.foundation.background
+-import androidx.compose.foundation.layout.Box
+-import androidx.compose.foundation.layout.Row
+-import androidx.compose.foundation.layout.aspectRatio
+-import androidx.compose.foundation.layout.fillMaxSize
+-import androidx.compose.foundation.layout.fillMaxWidth
+-import androidx.compose.foundation.layout.padding
+-import androidx.compose.foundation.layout.size
+-import androidx.compose.foundation.shape.CircleShape
+-import androidx.compose.foundation.shape.RoundedCornerShape
+-import androidx.compose.material3.Icon
+-import androidx.compose.material3.MaterialTheme
+-import androidx.compose.material3.Text
+-import androidx.compose.runtime.Composable
+-import androidx.compose.ui.Alignment
+-import androidx.compose.ui.Modifier
+-import androidx.compose.ui.draw.clip
+-import androidx.compose.ui.graphics.Brush
+-import androidx.compose.ui.graphics.Color
+-import androidx.compose.ui.res.painterResource
+-import androidx.compose.ui.text.font.FontWeight
+-import androidx.compose.ui.text.style.TextOverflow
+-import androidx.compose.ui.unit.dp
+-import com.metrolist.innertube.models.ArtistItem
+-import com.metrolist.innertube.models.SongItem
+-import com.metrolist.innertube.models.YTItem
+-import com.metrolist.music.R
+-import com.metrolist.music.constants.ThumbnailCornerRadius
+-import com.metrolist.music.ui.utils.resize
+-
+-@Composable
+-fun SpeedDialGridItem(
+-    item: YTItem,
+-    isPinned: Boolean,
+-    modifier: Modifier = Modifier,
+-    isActive: Boolean = false,
+-    isPlaying: Boolean = false,
+-) {
+-    Box(
+-        modifier = modifier
+-            .fillMaxWidth()
+-            .aspectRatio(1f) // Square aspect ratio
+-            .clip(RoundedCornerShape(ThumbnailCornerRadius))
+-    ) {
+-        // Thumbnail
+-        ItemThumbnail(
+-            thumbnailUrl = item.thumbnail?.resize(200, 200),
+-            isActive = isActive,
+-            isPlaying = isPlaying,
+-            shape = if (item is ArtistItem) CircleShape else RoundedCornerShape(ThumbnailCornerRadius),
+-            modifier = Modifier.fillMaxSize()
+-        )
+-
+-        // Gradient Overlay for Text Readability and Icon Contrast
+-        Box(
+-            modifier = Modifier
+-                .fillMaxSize()
+-                .background(
+-                    Brush.verticalGradient(
+-                        colors = listOf(
+-                            Color.Black.copy(alpha = 0.4f), // Top scrim for icon visibility on bright covers
+-                            Color.Transparent,
+-                            Color.Black.copy(alpha = 0.6f),
+-                            Color.Black.copy(alpha = 0.9f)
+-                        )
+-                    )
+-                )
+-        )
+-
+-        // Title and Chevron
+-        Row(
+-            modifier = Modifier
+-                .align(Alignment.BottomStart)
+-                .padding(8.dp) // Reduced padding for tighter layout
+-                .fillMaxWidth(),
+-            verticalAlignment = Alignment.CenterVertically
+-        ) {
+-            Text(
+-                text = item.title,
+-                style = MaterialTheme.typography.titleSmall, // Smaller, punchier font
+-                fontWeight = FontWeight.Bold,
+-                color = Color.White,
+-                maxLines = 1,
+-                overflow = TextOverflow.Ellipsis,
+-                modifier = Modifier.weight(1f)
+-            )
+-            
+-            // Navigation Chevron for browsable items (Album, Playlist, Artist)
+-            if (item !is SongItem) {
+-                Icon(
+-                    painter = painterResource(R.drawable.navigate_next),
+-                    contentDescription = null,
+-                    tint = Color.White,
+-                    modifier = Modifier.size(20.dp)
+-                )
+-        }
+-    }
+-        // Pinned Icon
+-        if (isPinned) {
+-            Icon(
+-                painter = painterResource(R.drawable.ic_push_pin),
+-                contentDescription = null,
+-                tint = Color.White,
+-                modifier = Modifier
+-                    .align(Alignment.TopEnd)
+-                    .padding(8.dp)
+-                    .size(16.dp)
+-            )
+-        }
+-
+-
+-    }
+-}
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/AlbumMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/AlbumMenu.kt
+index 4511e901..0cfb3382 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/AlbumMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/AlbumMenu.kt
+@@ -74,7 +74,6 @@ import com.metrolist.music.constants.ListItemHeight
+ import com.metrolist.music.constants.ListThumbnailSize
+ import com.metrolist.music.db.entities.Album
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.playback.ExoDownloadService
+ import com.metrolist.music.playback.queues.ListQueue
+@@ -152,7 +151,6 @@ fun AlbumMenu(
+         label = "",
+     )
+ 
+-    val isPinned by database.speedDialDao.isPinned(album.id).collectAsStateWithLifecycle(initialValue = false)
+ 
+     var showChoosePlaylistDialog by rememberSaveable {
+         mutableStateOf(false)
+@@ -429,40 +427,6 @@ fun AlbumMenu(
+                                 showChoosePlaylistDialog = true
+                             },
+                         ),
+-                        Material3MenuItemData(
+-                            title = {
+-                                Text(
+-                                    text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                )
+-                            },
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                )
+-                            },
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(album.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(
+-                                            SpeedDialItem(
+-                                                id = album.id,
+-                                                secondaryId = album.album.playlistId,
+-                                                title = album.album.title,
+-                                                subtitle = album.artists.joinToString(", ") { it.name },
+-                                                subtitleIds = album.artists.joinToString(", ") { it.id },
+-                                                thumbnailUrl = album.album.thumbnailUrl,
+-                                                type = "ALBUM",
+-                                                explicit = album.album.explicit,
+-                                            ),
+-                                        )
+-                                    }
+-                                }
+-                                onDismiss()
+-                            },
+-                        ),
+                     ),
+             )
+         }
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/ArtistMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/ArtistMenu.kt
+index 419013fc..0a8064fd 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/ArtistMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/ArtistMenu.kt
+@@ -34,7 +34,6 @@ import com.metrolist.music.LocalListenTogetherManager
+ import com.metrolist.music.LocalPlayerConnection
+ import com.metrolist.music.R
+ import com.metrolist.music.constants.ArtistSongSortType
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.db.entities.Artist
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.playback.queues.ListQueue
+@@ -62,7 +61,7 @@ fun ArtistMenu(
+     val isGuest = listenTogetherManager?.isInRoom == true && !listenTogetherManager.isHost
+     val artistState = database.artist(originalArtist.id).collectAsStateWithLifecycle(initialValue = originalArtist)
+     val artist = artistState.value ?: originalArtist
+-    val isPinned by database.speedDialDao.isPinned(artist.id).collectAsStateWithLifecycle(initialValue = false)
++
+ 
+     ArtistListItem(
+         artist = artist,
+@@ -155,37 +154,6 @@ fun ArtistMenu(
+                         }
+                     }
+ 
+-                    add(
+-                        NewAction(
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                    modifier = Modifier.size(28.dp),
+-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                                )
+-                            },
+-                            text = if (isPinned) stringResource(R.string.unpin) else stringResource(R.string.pin),
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(artist.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(
+-                                            SpeedDialItem(
+-                                                id = artist.id,
+-                                                title = artist.artist.name,
+-                                                subtitle = null,
+-                                                thumbnailUrl = artist.artist.thumbnailUrl,
+-                                                type = "ARTIST"
+-                                            )
+-                                        )
+-                                    }
+-                                }
+-                                onDismiss()
+-                            }
+-                        )
+-                    )
+ 
+                     if (artist.artist.isYouTubeArtist) {
+                         add(
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/PlayerMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/PlayerMenu.kt
+index 1ecb4698..648ec0d6 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/PlayerMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/PlayerMenu.kt
+@@ -89,7 +89,6 @@ import com.metrolist.music.listentogether.ListenTogetherEvent
+ import com.metrolist.music.models.MediaMetadata
+ import com.metrolist.music.playback.ExoDownloadService
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.ui.component.BottomSheetState
+ import com.metrolist.music.ui.component.ListDialog
+ import com.metrolist.music.ui.component.Material3MenuGroup
+@@ -142,7 +141,6 @@ fun PlayerMenu(
+         .getDownload(mediaMetadata.id)
+         .collectAsStateWithLifecycle(initialValue = null)
+ 
+-    val isPinned by database.speedDialDao.isPinned(mediaMetadata.id).collectAsStateWithLifecycle(initialValue = false)
+ 
+     val artists =
+         remember(mediaMetadata.artists) {
+@@ -486,32 +484,6 @@ fun PlayerMenu(
+                                 },
+                             ),
+                         )
+-                        add(
+-                            Material3MenuItemData(
+-                                title = {
+-                                    Text(
+-                                        text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                    )
+-                                },
+-                                icon = {
+-                                    Icon(
+-                                        painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                        contentDescription = null,
+-                                        modifier = Modifier.size(24.dp),
+-                                    )
+-                                },
+-                                onClick = {
+-                                    coroutineScope.launch(Dispatchers.IO) {
+-                                        if (isPinned) {
+-                                            database.speedDialDao.delete(mediaMetadata.id)
+-                                        } else {
+-                                            database.speedDialDao.insert(SpeedDialItem.fromYTItem(mediaMetadata.toYTItem()))
+-                                        }
+-                                    }
+-                                    onDismiss()
+-                                },
+-                            ),
+-                        )
+                     },
+             )
+         }
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/PlaylistMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/PlaylistMenu.kt
+index f81bf3dc..dafbe154 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/PlaylistMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/PlaylistMenu.kt
+@@ -52,7 +52,6 @@ import com.metrolist.music.R
+ import com.metrolist.music.db.entities.Playlist
+ import com.metrolist.music.db.entities.PlaylistSong
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.playback.ExoDownloadService
+ import com.metrolist.music.playback.queues.ListQueue
+@@ -112,7 +111,6 @@ fun PlaylistMenu(
+ 
+     val editable: Boolean = playlist.playlist.isEditable == true
+ 
+-    val isPinned by database.speedDialDao.isPinned(playlist.id).collectAsStateWithLifecycle(initialValue = false)
+ 
+     var showExportDialog by remember { mutableStateOf(false) }
+ 
+@@ -492,40 +490,6 @@ fun PlaylistMenu(
+                                 ),
+                             )
+                         }
+-                        add(
+-                            Material3MenuItemData(
+-                                title = {
+-                                    Text(
+-                                        text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                    )
+-                                },
+-                                icon = {
+-                                    Icon(
+-                                        painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                        contentDescription = null,
+-                                    )
+-                                },
+-                                onClick = {
+-                                    coroutineScope.launch(Dispatchers.IO) {
+-                                        if (isPinned) {
+-                                            database.speedDialDao.delete(playlist.id)
+-                                        } else {
+-                                            database.speedDialDao.insert(
+-                                                SpeedDialItem(
+-                                                    id = playlist.id,
+-                                                    title = playlist.playlist.name,
+-                                                    subtitle = null,
+-                                                    subtitleIds = null,
+-                                                    thumbnailUrl = playlist.thumbnails.firstOrNull(),
+-                                                    type = "LOCAL_PLAYLIST",
+-                                                ),
+-                                            )
+-                                        }
+-                                    }
+-                                    onDismiss()
+-                                },
+-                            ),
+-                        )
+                         if (downloadPlaylist != true) {
+                             add(
+                                 when (downloadState) {
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/SongMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/SongMenu.kt
+index 1e65a318..f02480c2 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/SongMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/SongMenu.kt
+@@ -79,7 +79,6 @@ import com.metrolist.music.db.entities.Event
+ import com.metrolist.music.db.entities.PlaylistSong
+ import com.metrolist.music.db.entities.PodcastEntity
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.models.toMediaMetadata
+ import com.metrolist.music.playback.ExoDownloadService
+@@ -136,7 +135,6 @@ fun SongMenu(
+         label = "",
+     )
+ 
+-    val isPinned by database.speedDialDao.isPinned(song.id).collectAsStateWithLifecycle(initialValue = false)
+ 
+     // Podcast subscription state for episodes
+     val podcastEntity by produceState<PodcastEntity?>(initialValue = null, song) {
+@@ -660,43 +658,6 @@ fun SongMenu(
+             Material3MenuGroup(
+                 items =
+                     buildList {
+-                        add(
+-                            Material3MenuItemData(
+-                                title = {
+-                                    Text(
+-                                        text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                    )
+-                                },
+-                                icon = {
+-                                    Icon(
+-                                        painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                        contentDescription = null,
+-                                    )
+-                                },
+-                                onClick = {
+-                                    coroutineScope.launch(Dispatchers.IO) {
+-                                        if (isPinned) {
+-                                            database.speedDialDao.delete(song.id)
+-                                        } else {
+-                                            database.speedDialDao.insert(
+-                                                SpeedDialItem(
+-                                                    id = song.id,
+-                                                    title = song.song.title,
+-                                                    subtitle = song.artists.joinToString(", ") { it.name },
+-                                                    subtitleIds = song.artists.joinToString(", ") { it.id },
+-                                                    thumbnailUrl = song.song.thumbnailUrl,
+-                                                    type = "SONG",
+-                                                    explicit = song.song.explicit,
+-                                                    albumId = song.album?.id,
+-                                                    albumName = song.album?.title
+-                                                ),
+-                                            )
+-                                        }
+-                                    }
+-                                    onDismiss()
+-                                },
+-                            ),
+-                        )
+                         // For episodes, use "Save for later" / "Remove from saved" (Episodes for Later playlist)
+                         // For regular songs, use "Add to library"
+                         if (song.song.isEpisode) {
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeAlbumMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeAlbumMenu.kt
+index d2cc96bf..f5ab7cdf 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeAlbumMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeAlbumMenu.kt
+@@ -66,7 +66,6 @@ import com.metrolist.music.R
+ import com.metrolist.music.constants.ListItemHeight
+ import com.metrolist.music.constants.ListThumbnailSize
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.playback.ExoDownloadService
+ import com.metrolist.music.playback.queues.YouTubeAlbumRadio
+@@ -97,7 +96,7 @@ fun YouTubeAlbumMenu(
+     val listenTogetherManager = LocalListenTogetherManager.current
+     val isGuest = listenTogetherManager?.isInRoom == true && !listenTogetherManager.isHost
+     val album by database.albumWithSongs(albumItem.id).collectAsStateWithLifecycle(initialValue = null)
+-    val isPinned by database.speedDialDao.isPinned(albumItem.id).collectAsStateWithLifecycle(initialValue = false)
++
+     val artistNameAliases = LocalArtistNameAliases.current
+     val coroutineScope = rememberCoroutineScope()
+ 
+@@ -402,29 +401,6 @@ fun YouTubeAlbumMenu(
+                                 showChoosePlaylistDialog = true
+                             },
+                         ),
+-                        Material3MenuItemData(
+-                            title = {
+-                                Text(
+-                                    text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                )
+-                            },
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                )
+-                            },
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(albumItem.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(SpeedDialItem.fromYTItem(albumItem))
+-                                    }
+-                                }
+-                                onDismiss()
+-                            },
+-                        ),
+                     ),
+             )
+         }
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeArtistMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeArtistMenu.kt
+index bc3d0854..74928895 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeArtistMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeArtistMenu.kt
+@@ -35,7 +35,6 @@ import com.metrolist.music.LocalDatabase
+ import com.metrolist.music.LocalListenTogetherManager
+ import com.metrolist.music.LocalPlayerConnection
+ import com.metrolist.music.R
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.db.entities.ArtistEntity
+ import com.metrolist.music.playback.queues.YouTubeQueue
+ import com.metrolist.music.ui.component.Material3MenuGroup
+@@ -61,7 +60,7 @@ fun YouTubeArtistMenu(
+     val libraryArtist by database.artist(artist.id).collectAsStateWithLifecycle(initialValue = null)
+     val listenTogetherManager = LocalListenTogetherManager.current
+     val isGuest = listenTogetherManager?.isInRoom == true && !listenTogetherManager.isHost
+-    val isPinned by database.speedDialDao.isPinned(artist.id).collectAsStateWithLifecycle(initialValue = false)
++
+     val coroutineScope = rememberCoroutineScope()
+ 
+     YouTubeListItem(
+@@ -109,29 +108,6 @@ fun YouTubeArtistMenu(
+                         }
+                     }
+ 
+-                    add(
+-                        NewAction(
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                    modifier = Modifier.size(28.dp),
+-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+-                                )
+-                            },
+-                            text = if (isPinned) stringResource(R.string.unpin) else stringResource(R.string.pin),
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(artist.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(SpeedDialItem.fromYTItem(artist))
+-                                    }
+-                                }
+-                                onDismiss()
+-                            }
+-                        )
+-                    )
+ 
+                     add(
+                         NewAction(
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubePlaylistMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubePlaylistMenu.kt
+index 1e1c9842..ea06cce9 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubePlaylistMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubePlaylistMenu.kt
+@@ -69,7 +69,6 @@ import com.metrolist.music.constants.ListThumbnailSize
+ import com.metrolist.music.constants.ThumbnailCornerRadius
+ import com.metrolist.music.db.entities.PlaylistEntity
+ import com.metrolist.music.db.entities.PlaylistSongMap
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.models.MediaMetadata
+ import com.metrolist.music.models.toMediaMetadata
+@@ -114,7 +113,7 @@ fun YouTubePlaylistMenu(
+     val listenTogetherManager = LocalListenTogetherManager.current
+     val isGuest = listenTogetherManager?.isInRoom == true && !listenTogetherManager.isHost
+     val dbPlaylist by database.playlistByBrowseId(playlist.id).collectAsStateWithLifecycle(initialValue = null)
+-    val isPinned by database.speedDialDao.isPinned(playlist.id).collectAsStateWithLifecycle(initialValue = false)
++
+     val artistNameAliases = LocalArtistNameAliases.current
+ 
+     var showChoosePlaylistDialog by rememberSaveable { mutableStateOf(false) }
+@@ -559,29 +558,6 @@ fun YouTubePlaylistMenu(
+                                 showChoosePlaylistDialog = true
+                             },
+                         ),
+-                        Material3MenuItemData(
+-                            title = {
+-                                Text(
+-                                    text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial),
+-                                )
+-                            },
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                )
+-                            },
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(playlist.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(SpeedDialItem.fromYTItem(playlist))
+-                                    }
+-                                }
+-                                onDismiss()
+-                            },
+-                        ),
+                     ),
+             )
+         }
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeSongMenu.kt b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeSongMenu.kt
+index 4821ba02..4148f9a1 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeSongMenu.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/menu/YouTubeSongMenu.kt
+@@ -67,7 +67,6 @@ import com.metrolist.music.R
+ import com.metrolist.music.constants.ListItemHeight
+ import com.metrolist.music.constants.ListThumbnailSize
+ import com.metrolist.music.constants.ThumbnailCornerRadius
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.db.entities.SongEntity
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.models.MediaMetadata
+@@ -109,7 +108,7 @@ fun YouTubeSongMenu(
+     val coroutineScope = rememberCoroutineScope()
+     val syncUtils = LocalSyncUtils.current
+     val listenTogetherManager = LocalListenTogetherManager.current
+-    val isPinned by database.speedDialDao.isPinned(song.id).collectAsStateWithLifecycle(initialValue = false)
++
+     val artistNameAliases = LocalArtistNameAliases.current
+     val artists = remember(song.artists, artistNameAliases) {
+         song.artists.mapNotNull {
+@@ -500,31 +499,6 @@ fun YouTubeSongMenu(
+                             )
+                         )
+                     }
+-                    add(
+-                        Material3MenuItemData(
+-                            title = { 
+-                                Text(
+-                                    text = if (isPinned) stringResource(R.string.unpin_from_speed_dial) else stringResource(R.string.pin_to_speed_dial)
+-                                ) 
+-                            },
+-                            icon = {
+-                                Icon(
+-                                    painter = painterResource(if (isPinned) R.drawable.remove else R.drawable.add),
+-                                    contentDescription = null,
+-                                )
+-                            },
+-                            onClick = {
+-                                coroutineScope.launch(Dispatchers.IO) {
+-                                    if (isPinned) {
+-                                        database.speedDialDao.delete(song.id)
+-                                    } else {
+-                                        database.speedDialDao.insert(SpeedDialItem.fromYTItem(song))
+-                                    }
+-                                }
+-                                onDismiss()
+-                            }
+-                        )
+-                    )
+                     add(
+                         Material3MenuItemData(
+                             title = {
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/CrashActivity.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/CrashActivity.kt
+index f6b5bea5..17c86b0b 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/screens/CrashActivity.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/CrashActivity.kt
+@@ -6,6 +6,7 @@
+ package com.metrolist.music.ui.screens
+ 
+ import android.content.Intent
++import android.content.pm.PackageManager
+ import android.os.Bundle
+ import androidx.activity.ComponentActivity
+ import androidx.activity.compose.setContent
+@@ -28,6 +29,8 @@ import androidx.compose.material3.ExtendedFloatingActionButton
+ import androidx.compose.material3.Icon
+ import androidx.compose.material3.IconButton
+ import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.Surface
++import androidx.compose.material3.darkColorScheme
+ import androidx.compose.material3.Scaffold
+ import androidx.compose.material3.Text
+ import androidx.compose.material3.TopAppBar
+@@ -41,6 +44,7 @@ import androidx.compose.ui.res.stringResource
+ import androidx.compose.ui.text.font.FontFamily
+ import androidx.compose.ui.unit.dp
+ import androidx.compose.ui.unit.sp
++import androidx.compose.ui.graphics.Color
+ import androidx.core.content.FileProvider
+ import com.metrolist.music.R
+ import com.metrolist.music.ui.theme.MetrolistTheme
+@@ -57,8 +61,15 @@ class CrashActivity : ComponentActivity() {
+         enableEdgeToEdge()
+         
+         val crashLog = intent.getStringExtra(CrashHandler.EXTRA_CRASH_LOG) ?: getString(R.string.crash_no_log)
++        val savedReport = CrashHandler.savedCrashLog(this)?.absolutePath
+         
+         setContent {
++            if (packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) {
++                MaterialTheme(colorScheme = darkColorScheme()) {
++                    WatchCrashScreen(crashLog, savedReport)
++                }
++                return@setContent
++            }
+             val darkTheme = isSystemInDarkTheme()
+             MetrolistTheme(darkTheme = darkTheme) {
+                 CrashScreen(
+@@ -106,6 +117,29 @@ class CrashActivity : ComponentActivity() {
+     }
+ }
+ 
++@Composable
++internal fun WatchCrashScreen(crashLog: String, savedPath: String?) {
++    Surface(Modifier.fillMaxSize(), color = Color.Black, contentColor = Color.White) {
++        Column(
++            Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 36.dp),
++        ) {
++            Text(stringResource(R.string.crash_title), style = MaterialTheme.typography.titleSmall)
++            Spacer(Modifier.height(12.dp))
++            if (savedPath != null) {
++                Text(stringResource(R.string.crash_report_saved_path, savedPath), fontSize = 11.sp)
++                Spacer(Modifier.height(12.dp))
++            }
++            Text(
++                crashLog,
++                fontFamily = FontFamily.Monospace,
++                fontSize = 10.sp,
++                lineHeight = 14.sp,
++                softWrap = true,
++            )
++        }
++    }
++}
++
+ @OptIn(ExperimentalMaterial3Api::class)
+ @Composable
+ fun CrashScreen(
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/HomeScreen.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/HomeScreen.kt
+index 9520f2a0..7fa17015 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/screens/HomeScreen.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/HomeScreen.kt
+@@ -39,8 +39,6 @@ import androidx.compose.foundation.lazy.grid.LazyGridState
+ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+ import androidx.compose.foundation.lazy.items
+ import androidx.compose.foundation.lazy.rememberLazyListState
+-import androidx.compose.foundation.pager.HorizontalPager
+-import androidx.compose.foundation.pager.rememberPagerState
+ import androidx.compose.foundation.shape.CircleShape
+ import androidx.compose.foundation.shape.RoundedCornerShape
+ import androidx.compose.material3.Button
+@@ -141,10 +139,8 @@ import com.metrolist.music.ui.component.HideOnScrollFAB
+ import com.metrolist.music.ui.component.LocalBottomSheetPageState
+ import com.metrolist.music.ui.component.LocalMenuState
+ import com.metrolist.music.ui.component.NavigationTitle
+-import com.metrolist.music.ui.component.RandomizeGridItem
+ import com.metrolist.music.ui.component.SongGridItem
+ import com.metrolist.music.ui.component.SongListItem
+-import com.metrolist.music.ui.component.SpeedDialGridItem
+ import com.metrolist.music.ui.component.YouTubeGridItem
+ import com.metrolist.music.ui.component.YouTubeListItem
+ import com.metrolist.music.ui.component.shimmer.GridItemPlaceHolder
+@@ -167,6 +163,7 @@ import com.metrolist.music.utils.rememberEnumPreference
+ import com.metrolist.music.utils.rememberPreference
+ import com.metrolist.music.viewmodels.CommunityPlaylistItem
+ import com.metrolist.music.viewmodels.HomeViewModel
++import com.metrolist.music.viewmodels.youtubeQuickPicksSection
+ import kotlinx.coroutines.Dispatchers
+ import kotlinx.coroutines.flow.first
+ import kotlinx.coroutines.launch
+@@ -174,13 +171,14 @@ import kotlinx.coroutines.withContext
+ import kotlin.math.min
+ import kotlin.random.Random
+ 
++internal fun quickPicksFirst(sections: List<HomeSection>): List<HomeSection> =
++    listOf(HomeSection.QuickPicks) + sections.filterNot { it == HomeSection.QuickPicks }
++
+ sealed class HomeSection(
+     val id: String,
+     val baseWeight: Int,
+ ) {
+-    data object SpeedDial : HomeSection("speed_dial", 100)
+-
+-    data object QuickPicks : HomeSection("quick_picks", 90)
++    data object QuickPicks : HomeSection("quick_picks", 100)
+ 
+     data object DailyDiscover : HomeSection("daily_discover", 80)
+ 
+@@ -660,7 +658,8 @@ fun HomeScreen(
+     val isPlaying by playerConnection.isEffectivelyPlaying.collectAsStateWithLifecycle()
+     val mediaMetadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
+ 
+-    val quickPicks by viewModel.quickPicks.collectAsStateWithLifecycle()
++    val quickPicks by viewModel.officialQuickPicks.collectAsStateWithLifecycle()
++    val quickPicksTitle = stringResource(R.string.quick_picks)
+     val forgottenFavorites by viewModel.forgottenFavorites.collectAsStateWithLifecycle()
+     val keepListening by viewModel.keepListening.collectAsStateWithLifecycle()
+     val similarRecommendations by viewModel.similarRecommendations.collectAsStateWithLifecycle()
+@@ -672,8 +671,6 @@ fun HomeScreen(
+ 
+     val allLocalItems by viewModel.allLocalItems.collectAsStateWithLifecycle()
+     val allYtItems by viewModel.allYtItems.collectAsStateWithLifecycle()
+-    val speedDialItems by viewModel.speedDialItems.collectAsStateWithLifecycle()
+-    val pinnedSpeedDialItems by viewModel.pinnedSpeedDialItems.collectAsStateWithLifecycle()
+     val selectedChip by viewModel.selectedChip.collectAsStateWithLifecycle()
+ 
+     // Official podcast API data
+@@ -683,7 +680,6 @@ fun HomeScreen(
+     val isLoading: Boolean by viewModel.isLoading.collectAsStateWithLifecycle()
+     val isMoodAndGenresLoading = isLoading && explorePage?.moodAndGenres == null
+     val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+-    val isRandomizing by viewModel.isRandomizing.collectAsStateWithLifecycle()
+     val pullRefreshState = rememberPullToRefreshState()
+ 
+     val quickPicksLazyGridState = rememberLazyGridState()
+@@ -749,7 +745,6 @@ fun HomeScreen(
+ 
+     val scope = rememberCoroutineScope()
+     // Track randomization job
+-    var randomizeJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+ 
+     val lazylistState = rememberLazyListState()
+     val gridItemSize by rememberEnumPreference(GridItemsSizeKey, GridItemSize.BIG)
+@@ -1028,7 +1023,7 @@ fun HomeScreen(
+             randomizeHomeOrder,
+             randomSeed,
+             selectedChip,
+-            speedDialItems,
++            quickPicksTitle,
+             quickPicks,
+             dailyDiscover,
+             keepListening,
+@@ -1042,8 +1037,7 @@ fun HomeScreen(
+             val list = mutableListOf<HomeSection>()
+             val chipActive = selectedChip != null
+ 
+-            if (!chipActive && speedDialItems.isNotEmpty()) list.add(HomeSection.SpeedDial)
+-            if (!chipActive && quickPicks?.isNotEmpty() == true) list.add(HomeSection.QuickPicks)
++            if (!chipActive) list.add(HomeSection.QuickPicks)
+             if (!chipActive && communityPlaylists?.isNotEmpty() == true) list.add(HomeSection.FromTheCommunity)
+             if (!chipActive && dailyDiscover?.isNotEmpty() == true) list.add(HomeSection.DailyDiscover)
+             if (!chipActive && keepListening?.isNotEmpty() == true) list.add(HomeSection.KeepListening)
+@@ -1056,13 +1050,14 @@ fun HomeScreen(
+                 }
+             }
+ 
+-            homePage?.sections?.indices?.forEach { i ->
+-                list.add(HomeSection.HomePageSection(i))
++            val officialSection = youtubeQuickPicksSection(homePage, quickPicksTitle)
++            homePage?.sections?.forEachIndexed { i, section ->
++                if (chipActive || section != officialSection) list.add(HomeSection.HomePageSection(i))
+             }
+ 
+             if (explorePage?.moodAndGenres != null) list.add(HomeSection.MoodAndGenres)
+ 
+-            if (randomizeHomeOrder) {
++            val sorted = if (randomizeHomeOrder) {
+                 list.sortedByDescending { section ->
+                     // Use a stable seed for each section based on the session seed + section ID hash
+                     // This ensures the weight for a specific section remains constant during a session (until refresh)
+@@ -1073,7 +1068,6 @@ fun HomeScreen(
+                     // All "main" sections start closer together
+                     val base =
+                         when (section) {
+-                            HomeSection.SpeedDial,
+                             HomeSection.QuickPicks,
+                             HomeSection.DailyDiscover,
+                             -> 500
+@@ -1095,7 +1089,6 @@ fun HomeScreen(
+                         when (section) {
+                             // Top tier: High variance to allow shuffling among themselves
+                             // Range: [500-200, 500+400] = [300, 900]
+-                            HomeSection.SpeedDial,
+                             HomeSection.QuickPicks,
+                             HomeSection.DailyDiscover,
+                             -> sectionRandom.nextInt(-200, 400)
+@@ -1117,8 +1110,7 @@ fun HomeScreen(
+             } else {
+                 val defaultOrder =
+                     mapOf(
+-                        HomeSection.SpeedDial to 100,
+-                        HomeSection.QuickPicks to 90,
++                        HomeSection.QuickPicks to 100,
+                         HomeSection.FromTheCommunity to 80,
+                         HomeSection.DailyDiscover to 70,
+                         HomeSection.KeepListening to 60,
+@@ -1135,6 +1127,7 @@ fun HomeScreen(
+                     }
+                 }
+             }
++            if (chipActive) sorted else quickPicksFirst(sorted)
+         }
+ 
+     LaunchedEffect(quickPicks) {
+@@ -1437,432 +1430,73 @@ fun HomeScreen(
+ 
+                 homeSections.forEach { section ->
+                     when (section) {
+-                        HomeSection.SpeedDial -> {
+-                            speedDialItems.takeIf { it.isNotEmpty() }?.let { items ->
+-                                item(key = "speed_dial_title") {
+-                                    NavigationTitle(
+-                                        title = stringResource(R.string.speed_dial),
+-                                    )
+-                                }
+-
+-                                item(key = "speed_dial_list") {
+-                                    val targetItemSize = 160.dp
+-                                    val availableWidth = maxWidth - 32.dp
+-                                    val columns = (availableWidth / targetItemSize).toInt().coerceAtLeast(3)
+-                                    val rows =
+-                                        if (columns >= 6) {
+-                                            1
+-                                        } else if (columns >= 4) {
+-                                            2
+-                                        } else {
+-                                            3
+-                                        }
+-                                    val itemsPerPage = columns * rows
+-                                    val itemWidth = availableWidth / columns
+-
+-                                    val pagerState = rememberPagerState(pageCount = { (items.size + itemsPerPage - 1) / itemsPerPage })
+-
+-                                    Column(
+-                                        modifier =
+-                                            Modifier
+-                                                .fillMaxWidth(),
+-                                    ) {
+-                                        HorizontalPager(
+-                                            state = pagerState,
+-                                            contentPadding = PaddingValues(horizontal = 16.dp),
+-                                            pageSpacing = 16.dp,
+-                                            modifier =
+-                                                Modifier
+-                                                    .fillMaxWidth()
+-                                                    .height(itemWidth * rows),
+-                                        ) { page ->
+-                                            val pageStartIndex = page * itemsPerPage
+-                                            val pageItems = items.drop(pageStartIndex).take(itemsPerPage)
+-
+-                                            Column(modifier = Modifier.fillMaxSize()) {
+-                                                for (row in 0 until rows) {
+-                                                    Row(modifier = Modifier.fillMaxWidth()) {
+-                                                        for (col in 0 until columns) {
+-                                                            val itemIndex = row * columns + col
+-
+-                                                            val isRandomizeSlot = (page == 0 && itemIndex == itemsPerPage - 1)
+-
+-                                                            if (isRandomizeSlot) {
+-                                                                Box(
+-                                                                    modifier =
+-                                                                        Modifier
+-                                                                            .width(itemWidth)
+-                                                                            .height(itemWidth)
+-                                                                            .padding(4.dp),
+-                                                                ) {
+-                                                                    RandomizeGridItem(
+-                                                                        isLoading = isRandomizing,
+-                                                                        onClick = {
+-                                                                            if (isRandomizing) {
+-                                                                                randomizeJob?.cancel()
+-                                                                            } else if (!isListenTogetherGuest) {
+-                                                                                randomizeJob =
+-                                                                                    scope.launch {
+-                                                                                        val randomItem = viewModel.getRandomItem()
+-                                                                                        if (randomItem != null) {
+-                                                                                            when (randomItem) {
+-                                                                                                is SongItem -> {
+-                                                                                                    playerConnection.playQueue(
+-                                                                                                        if (autoRadioQueue) {
+-                                                                                                            YouTubeQueue(
+-                                                                                                                randomItem.endpoint
+-                                                                                                                    ?: WatchEndpoint(
+-                                                                                                                        videoId = randomItem.id,
+-                                                                                                                    ),
+-                                                                                                                randomItem.toMediaMetadata(),
+-                                                                                                            )
+-                                                                                                        } else {
+-                                                                                                            ListQueue(
+-                                                                                                                title = randomItem.title,
+-                                                                                                                items = listOf(randomItem.toMediaItem())
+-                                                                                                            )
+-                                                                                                        }
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is AlbumItem -> {
+-                                                                                                    navController.navigate(
+-                                                                                                        "album/${randomItem.id}",
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is ArtistItem -> {
+-                                                                                                    navController.navigate(
+-                                                                                                        "artist/${randomItem.id}",
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is PlaylistItem -> {
+-                                                                                                    navController.navigate(
+-                                                                                                        "online_playlist/${randomItem.id}",
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is PodcastItem -> {
+-                                                                                                    navController.navigate(
+-                                                                                                        "online_podcast/${randomItem.id}",
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is EpisodeItem -> {
+-                                                                                                    playerConnection.playQueue(
+-                                                                                                        ListQueue(
+-                                                                                                            title = randomItem.title,
+-                                                                                                            items =
+-                                                                                                                listOf(
+-                                                                                                                    randomItem
+-                                                                                                                        .toMediaMetadata()
+-                                                                                                                        .toMediaItem(),
+-                                                                                                                ),
+-                                                                                                        ),
+-                                                                                                    )
+-                                                                                                }
+-                                                                                            }
+-                                                                                        }
+-                                                                                    }
+-                                                                            }
+-                                                                        },
+-                                                                    )
+-                                                                }
+-                                                            } else if (itemIndex < pageItems.size) {
+-                                                                val item = pageItems[itemIndex]
+-                                                                val isPinned by database.speedDialDao
+-                                                                    .isPinned(
+-                                                                        item.id,
+-                                                                    ).collectAsStateWithLifecycle(initialValue = false)
+-
+-                                                                Box(
+-                                                                    modifier =
+-                                                                        Modifier
+-                                                                            .width(itemWidth)
+-                                                                            .height(itemWidth)
+-                                                                            .padding(4.dp),
+-                                                                ) {
+-                                                                    SpeedDialGridItem(
+-                                                                        item = item,
+-                                                                        isPinned = isPinned,
+-                                                                        isActive =
+-                                                                            item.id in listOf(mediaMetadata?.album?.id, mediaMetadata?.id),
+-                                                                        isPlaying = isPlaying,
+-                                                                        modifier =
+-                                                                            Modifier
+-                                                                                .fillMaxSize()
+-                                                                                .combinedClickable(
+-                                                                                    onClick = {
+-                                                                                        when (item) {
+-                                                                                            is SongItem -> {
+-                                                                                                if (!isListenTogetherGuest) {
+-                                                                                                    playerConnection.playQueue(
+-                                                                                                        if (autoRadioQueue) {
+-                                                                                                            YouTubeQueue(
+-                                                                                                                item.endpoint
+-                                                                                                                    ?: WatchEndpoint(
+-                                                                                                                        videoId = item.id,
+-                                                                                                                    ),
+-                                                                                                                item.toMediaMetadata(),
+-                                                                                                            )
+-                                                                                                        } else {
+-                                                                                                            ListQueue(
+-                                                                                                                title = item.title,
+-                                                                                                                items = listOf(item.toMediaItem())
+-                                                                                                            )
+-                                                                                                        }
+-                                                                                                    )
+-                                                                                                }
+-                                                                                            }
+-
+-                                                                                            is AlbumItem -> {
+-                                                                                                navController.navigate("album/${item.id}")
+-                                                                                            }
+-
+-                                                                                            is ArtistItem -> {
+-                                                                                                navController.navigate("artist/${item.id}")
+-                                                                                            }
+-
+-                                                                                            is PlaylistItem -> {
+-                                                                                                val rawType =
+-                                                                                                    pinnedSpeedDialItems
+-                                                                                                        .find {
+-                                                                                                            it.id ==
+-                                                                                                                item.id
+-                                                                                                        }?.type
+-                                                                                                if (rawType == "LOCAL_PLAYLIST") {
+-                                                                                                    navController.navigate(
+-                                                                                                        "local_playlist/${item.id}",
+-                                                                                                    )
+-                                                                                                } else {
+-                                                                                                    navController.navigate(
+-                                                                                                        "online_playlist/${item.id}",
+-                                                                                                    )
+-                                                                                                }
+-                                                                                            }
+-
+-                                                                                            is PodcastItem -> {
+-                                                                                                navController.navigate(
+-                                                                                                    "online_podcast/${item.id}",
+-                                                                                                )
+-                                                                                            }
+-
+-                                                                                            is EpisodeItem -> {
+-                                                                                                if (!isListenTogetherGuest) {
+-                                                                                                    playerConnection.playQueue(
+-                                                                                                        ListQueue(
+-                                                                                                            title = item.title,
+-                                                                                                            items =
+-                                                                                                                listOf(
+-                                                                                                                    item
+-                                                                                                                        .toMediaMetadata()
+-                                                                                                                        .toMediaItem(),
+-                                                                                                                ),
+-                                                                                                        ),
+-                                                                                                    )
+-                                                                                                }
+-                                                                                            }
+-                                                                                        }
+-                                                                                    },
+-                                                                                    onLongClick = {
+-                                                                                        haptic.performHapticFeedback(
+-                                                                                            HapticFeedbackType.LongPress,
+-                                                                                        )
+-                                                                                        menuState.show {
+-                                                                                            when (item) {
+-                                                                                                is SongItem -> {
+-                                                                                                    YouTubeSongMenu(
+-                                                                                                        song = item,
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is AlbumItem -> {
+-                                                                                                    YouTubeAlbumMenu(
+-                                                                                                        albumItem = item,
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is ArtistItem -> {
+-                                                                                                    YouTubeArtistMenu(
+-                                                                                                        artist = item,
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is PlaylistItem -> {
+-                                                                                                    YouTubePlaylistMenu(
+-                                                                                                        playlist = item,
+-                                                                                                        coroutineScope = scope,
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is PodcastItem -> {
+-                                                                                                    YouTubePlaylistMenu(
+-                                                                                                        playlist = item.asPlaylistItem(),
+-                                                                                                        coroutineScope = scope,
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-
+-                                                                                                is EpisodeItem -> {
+-                                                                                                    YouTubeSongMenu(
+-                                                                                                        song = item.asSongItem(),
+-                                                                                                        onDismiss = menuState::dismiss,
+-                                                                                                    )
+-                                                                                                }
+-                                                                                            }
+-                                                                                        }
+-                                                                                    },
+-                                                                                ),
+-                                                                    )
+-                                                                }
+-                                                            } else {
+-                                                                Spacer(modifier = Modifier.width(itemWidth))
+-                                                            }
+-                                                        }
+-                                                    }
+-                                                }
+-                                            }
++                        HomeSection.QuickPicks -> {
++                            item(key = "youtube_quick_picks_title") {
++                                NavigationTitle(
++                                    title = quickPicksTitle,
++                                    onPlayAllClick = if (quickPicks.isEmpty() || isListenTogetherGuest) null else {
++                                        {
++                                            playerConnection.playQueue(ListQueue(
++                                                title = quickPicksTitle,
++                                                items = quickPicks.map { it.toMediaItem() },
++                                            ))
+                                         }
+-
+-                                        if (pagerState.pageCount > 1) {
+-                                            Row(
+-                                                modifier =
+-                                                    Modifier
+-                                                        .height(24.dp)
+-                                                        .fillMaxWidth(),
+-                                                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.Center,
+-                                                verticalAlignment = Alignment.CenterVertically,
+-                                            ) {
+-                                                repeat(pagerState.pageCount) { iteration ->
+-                                                    val color =
+-                                                        if (pagerState.currentPage == iteration) {
+-                                                            MaterialTheme.colorScheme.primary
+-                                                        } else {
+-                                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+-                                                        }
+-                                                    Box(
+-                                                        modifier =
+-                                                            Modifier
+-                                                                .padding(4.dp)
+-                                                                .clip(CircleShape)
+-                                                                .background(color)
+-                                                                .size(8.dp),
+-                                                    )
+-                                                }
+-                                            }
++                                    },
++                                )
++                            }
++                            if (quickPicks.isEmpty()) {
++                                item(key = "youtube_quick_picks_empty") {
++                                    if (isLoading) {
++                                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
++                                            ContainedLoadingIndicator()
+                                         }
++                                    } else {
++                                        Text(stringResource(R.string.youtube_quick_picks_empty), modifier = Modifier.padding(16.dp))
+                                     }
+                                 }
+-                            }
+-                        }
+-
+-                        HomeSection.QuickPicks -> {
+-                            quickPicks?.takeIf { it.isNotEmpty() }?.let { quickPicks ->
+-                                item(key = "quick_picks_title") {
+-                                    val quickPicksTitle = stringResource(R.string.quick_picks)
+-                                    NavigationTitle(
+-                                        title = quickPicksTitle,
+-                                        onPlayAllClick =
+-                                            if (!isListenTogetherGuest) {
+-                                                {
+-                                                    playerConnection.playQueue(
+-                                                        ListQueue(
+-                                                            title = quickPicksTitle,
+-                                                            items = quickPicks.distinctBy { it.id }.map { it.toMediaItem() },
+-                                                        ),
+-                                                    )
+-                                                }
+-                                            } else {
+-                                                null
+-                                            },
+-                                    )
+-                                }
+-
+-                                item(key = "quick_picks_list") {
++                            } else {
++                                item(key = "youtube_quick_picks_list") {
+                                     LazyHorizontalGrid(
+                                         state = quickPicksLazyGridState,
+                                         rows = GridCells.Fixed(4),
+                                         flingBehavior = rememberSnapFlingBehavior(quickPicksSnapLayoutInfoProvider),
+-                                        contentPadding =
+-                                            WindowInsets.systemBars
+-                                                .only(WindowInsetsSides.Horizontal)
+-                                                .asPaddingValues(),
+-                                        modifier =
+-                                            Modifier
+-                                                .fillMaxWidth()
+-                                                .height(ListItemHeight * 4),
+-                                        ) {
+-                                            items(
+-                                                items = quickPicks.distinctBy { it.id },
+-                                                key = { "home_quickpick_${it.id}" },
+-                                            ) { originalSong ->
+-                                            // fetch song from database to keep updated
+-                                            val song by database
+-                                                .song(originalSong.id)
+-                                                .collectAsStateWithLifecycle(initialValue = originalSong)
+-
+-                                            SongListItem(
+-                                                song = song!!,
+-                                                showInLibraryIcon = true,
+-                                                isActive = song!!.id == mediaMetadata?.id,
++                                        contentPadding = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal).asPaddingValues(),
++                                        modifier = Modifier.fillMaxWidth().height(ListItemHeight * 4),
++                                    ) {
++                                        items(quickPicks, key = { "official_quick_pick_${it.id}" }) { song ->
++                                            YouTubeListItem(
++                                                item = song,
++                                                isActive = song.id == mediaMetadata?.id,
+                                                 isPlaying = isPlaying,
+                                                 isSwipeable = false,
+                                                 trailingContent = {
+-                                                    IconButton(
+-                                                        onClick = {
+-                                                            menuState.show {
+-                                                                SongMenu(
+-                                                                    originalSong = song!!,
+-                                                                    onDismiss = menuState::dismiss,
+-                                                                )
+-                                                            }
+-                                                        },
+-                                                    ) {
+-                                                        Icon(
+-                                                            painter = painterResource(R.drawable.more_vert),
+-                                                            contentDescription = null,
+-                                                        )
++                                                    IconButton(onClick = {
++                                                        menuState.show { YouTubeSongMenu(song = song, onDismiss = menuState::dismiss) }
++                                                    }) {
++                                                        Icon(painterResource(R.drawable.more_vert), contentDescription = null)
+                                                     }
+                                                 },
+-                                                modifier =
+-                                                    Modifier
+-                                                        .width(horizontalLazyGridItemWidth)
+-                                                        .combinedClickable(
+-                                                            onClick = {
+-                                                                if (!isListenTogetherGuest) {
+-                                                                    if (song!!.id == mediaMetadata?.id) {
+-                                                                        playerConnection.togglePlayPause()
+-                                                                    } else {
+-                                                                        playerConnection.playQueue(
+-                                                                            if (autoRadioQueue) {
+-                                                                                YouTubeQueue.radio(
+-                                                                                    song!!.toMediaMetadata(),
+-                                                                                )
+-                                                                            } else {
+-                                                                                ListQueue(
+-                                                                                    title = song!!.title,
+-                                                                                    items = listOf(song!!.toMediaItem())
+-                                                                                )
+-                                                                            }
+-                                                                        )
+-                                                                    }
+-                                                                }
+-                                                            },
+-                                                            onLongClick = {
+-                                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+-                                                                menuState.show {
+-                                                                    SongMenu(
+-                                                                        originalSong = song!!,
+-                                                                        onDismiss = menuState::dismiss,
+-                                                                    )
+-                                                                }
+-                                                            },
+-                                                        ),
++                                                modifier = Modifier.width(horizontalLazyGridItemWidth).combinedClickable(
++                                                    onClick = {
++                                                        if (!isListenTogetherGuest) {
++                                                            if (song.id == mediaMetadata?.id) {
++                                                                playerConnection.togglePlayPause()
++                                                            } else {
++                                                                playerConnection.playQueue(
++                                                                    if (autoRadioQueue) YouTubeQueue.radio(song.toMediaMetadata()) else ListQueue(
++                                                                        title = quickPicksTitle,
++                                                                        items = quickPicks.map { it.toMediaItem() },
++                                                                        startIndex = quickPicks.indexOf(song),
++                                                                    ),
++                                                                )
++                                                            }
++                                                        }
++                                                    },
++                                                    onLongClick = {
++                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
++                                                        menuState.show { YouTubeSongMenu(song = song, onDismiss = menuState::dismiss) }
++                                                    },
++                                                ),
+                                             )
+                                         }
+                                     }
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/library/LibraryPodcastsScreen.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/library/LibraryPodcastsScreen.kt
+index d5fa8830..d6f49fba 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/screens/library/LibraryPodcastsScreen.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/library/LibraryPodcastsScreen.kt
+@@ -76,7 +76,6 @@ import com.metrolist.music.constants.SongSortTypeKey
+ import com.metrolist.music.constants.ThumbnailCornerRadius
+ import com.metrolist.music.db.MusicDatabase
+ import com.metrolist.music.db.entities.PodcastEntity
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.toMediaItem
+ import com.metrolist.music.playback.queues.ListQueue
+ import com.metrolist.music.ui.component.ChipsRow
+@@ -644,7 +643,7 @@ private fun PodcastEpisodePlaylistMenu(
+     val context = LocalContext.current
+     val coroutineScope = rememberCoroutineScope()
+     val syncUtils = LocalSyncUtils.current
+-    val isPinned by database.speedDialDao.isPinned(podcast.id).collectAsStateWithLifecycle(initialValue = false)
++
+ 
+     val playlistId = podcast.id.removePrefix("MPSP")
+     val shareUrl = "https://music.youtube.com/playlist?list=$playlistId"
+@@ -692,47 +691,6 @@ private fun PodcastEpisodePlaylistMenu(
+                         onDismiss()
+                     },
+                 ),
+-                Material3MenuItemData(
+-                    title = {
+-                        Text(
+-                            text =
+-                                stringResource(
+-                                    if (isPinned) {
+-                                        R.string.unpin_from_speed_dial
+-                                    } else {
+-                                        R.string.pin_to_speed_dial
+-                                    },
+-                                ),
+-                        )
+-                    },
+-                    icon = {
+-                        Icon(
+-                            painter =
+-                                painterResource(
+-                                    if (isPinned) R.drawable.remove else R.drawable.add,
+-                                ),
+-                            contentDescription = null,
+-                        )
+-                    },
+-                    onClick = {
+-                        coroutineScope.launch(Dispatchers.IO) {
+-                            if (isPinned) {
+-                                database.speedDialDao.delete(podcast.id)
+-                            } else {
+-                                database.speedDialDao.insert(
+-                                    SpeedDialItem(
+-                                        id = podcast.id,
+-                                        title = podcast.title,
+-                                        subtitle = podcast.author,
+-                                        thumbnailUrl = podcast.thumbnailUrl,
+-                                        type = "PLAYLIST",
+-                                    ),
+-                                )
+-                            }
+-                        }
+-                        onDismiss()
+-                    },
+-                ),
+             ),
+     )
+     Spacer(Modifier.height(12.dp))
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/settings/ContentSettings.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/settings/ContentSettings.kt
+index c3df4bcf..911f3aef 100644
+--- a/app/src/main/kotlin/com/metrolist/music/ui/screens/settings/ContentSettings.kt
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/settings/ContentSettings.kt
+@@ -78,8 +78,6 @@ import com.metrolist.music.constants.ProxyPasswordKey
+ import com.metrolist.music.constants.ProxyTypeKey
+ import com.metrolist.music.constants.ProxyUrlKey
+ import com.metrolist.music.constants.ProxyUsernameKey
+-import com.metrolist.music.constants.QuickPicks
+-import com.metrolist.music.constants.QuickPicksKey
+ import com.metrolist.music.constants.RandomizeHomeOrderKey
+ import com.metrolist.music.constants.SYSTEM_DEFAULT
+ import com.metrolist.music.constants.ShowArtistDescriptionKey
+@@ -134,7 +132,6 @@ fun ContentSettings(
+         defaultValue = LyricsProviderRegistry.serializeProviderOrder(LyricsProviderRegistry.getDefaultProviderOrder())
+     )
+     val (lengthTop, onLengthTopChange) = rememberPreference(key = TopSize, defaultValue = "50")
+-    val (quickPicks, onQuickPicksChange) = rememberEnumPreference(key = QuickPicksKey, defaultValue = QuickPicks.QUICK_PICKS)
+     val (showWrappedCard, onShowWrappedCardChange) = rememberPreference(key = ShowWrappedCardKey, defaultValue = false)
+     val (showMostStatsPlaylists, onShowMostStatsPlaylistsChange) =
+         rememberPreference(key = ShowMostStatsPlaylistsKey, defaultValue = true)
+@@ -571,29 +568,6 @@ fun ContentSettings(
+         )
+     }
+ 
+-    var showQuickPicksDialog by rememberSaveable {
+-        mutableStateOf(false)
+-    }
+-
+-    if (showQuickPicksDialog) {
+-        EnumDialog(
+-            onDismiss = { showQuickPicksDialog = false },
+-            onSelect = {
+-                onQuickPicksChange(it)
+-                showQuickPicksDialog = false
+-            },
+-            title = stringResource(R.string.set_quick_picks),
+-            current = quickPicks,
+-            values = QuickPicks.values().toList(),
+-            valueText = {
+-                when (it) {
+-                    QuickPicks.QUICK_PICKS -> stringResource(R.string.quick_picks)
+-                    QuickPicks.LAST_LISTEN -> stringResource(R.string.last_song_listened)
+-                }
+-            }
+-        )
+-    }
+-
+     var showAddToPlaylistPositionDialog by rememberSaveable {
+         mutableStateOf(false)
+     }
+@@ -1096,19 +1070,7 @@ fun ContentSettings(
+                     description = { Text(lengthTop) },
+                     onClick = { showTopLengthDialog = true }
+                 ),
+-                Material3SettingsItem(
+-                    icon = painterResource(R.drawable.home_outlined),
+-                    title = { Text(stringResource(R.string.set_quick_picks)) },
+-                    description = {
+-                        Text(
+-                            when (quickPicks) {
+-                                QuickPicks.QUICK_PICKS -> stringResource(R.string.quick_picks)
+-                                QuickPicks.LAST_LISTEN -> stringResource(R.string.last_song_listened)
+-                            }
+-                        )
+-                    },
+-                    onClick = { showQuickPicksDialog = true }
+-                )
++
+             )
+         )
+         Spacer(modifier = Modifier.height(16.dp))
+diff --git a/app/src/main/kotlin/com/metrolist/music/utils/CrashHandler.kt b/app/src/main/kotlin/com/metrolist/music/utils/CrashHandler.kt
+index b180bf21..f79fb393 100644
+--- a/app/src/main/kotlin/com/metrolist/music/utils/CrashHandler.kt
++++ b/app/src/main/kotlin/com/metrolist/music/utils/CrashHandler.kt
+@@ -13,6 +13,7 @@ import com.metrolist.music.ui.screens.CrashActivity
+ import timber.log.Timber
+ import java.io.PrintWriter
+ import java.io.StringWriter
++import java.io.File
+ import kotlin.system.exitProcess
+ 
+ class CrashHandler private constructor(
+@@ -25,6 +26,7 @@ class CrashHandler private constructor(
+     override fun uncaughtException(thread: Thread, throwable: Throwable) {
+         try {
+             val crashLog = buildCrashLog(throwable)
++            persistCrashLog(applicationContext, crashLog)
+             Timber.e(throwable, "App crashed")
+             
+             // Launch crash activity
+@@ -69,6 +71,27 @@ class CrashHandler private constructor(
+     companion object {
+         const val EXTRA_CRASH_LOG = "crash_log"
+ 
++        @Synchronized
++        internal fun persistCrashLog(context: Context, log: String): File? {
++            val external = runCatching { context.getExternalFilesDir(null) }.getOrNull()
++            for (storage in listOfNotNull(external, context.noBackupFilesDir)) {
++                try {
++                    val directory = File(storage, "crash-reports")
++                    check(directory.isDirectory || directory.mkdirs())
++                    return File(directory, "latest-crash.txt").apply { writeText(log) }
++                } catch (error: Exception) {
++                    Timber.w(error, "Could not persist crash report in this app storage directory")
++                }
++            }
++            return null
++        }
++
++        internal fun savedCrashLog(context: Context): File? =
++            listOfNotNull(
++                runCatching { context.getExternalFilesDir(null) }.getOrNull(),
++                context.noBackupFilesDir,
++            ).map { File(it, "crash-reports/latest-crash.txt") }.firstOrNull { it.isFile }
++
+         fun install(context: Context) {
+             val handler = CrashHandler(context.applicationContext)
+             Thread.setDefaultUncaughtExceptionHandler(handler)
+diff --git a/app/src/main/kotlin/com/metrolist/music/utils/InnerTubeXPlayer.kt b/app/src/main/kotlin/com/metrolist/music/utils/InnerTubeXPlayer.kt
+index 03138a7b..d47b2690 100644
+--- a/app/src/main/kotlin/com/metrolist/music/utils/InnerTubeXPlayer.kt
++++ b/app/src/main/kotlin/com/metrolist/music/utils/InnerTubeXPlayer.kt
+@@ -1,6 +1,7 @@
+ package com.metrolist.music.utils
+ 
+ import android.content.Context
++import android.content.pm.PackageManager
+ import android.net.ConnectivityManager
+ import com.metrolist.innertube.YouTube
+ import com.metrolist.innertube.models.Thumbnail
+@@ -180,30 +181,37 @@ object InnerTubeXPlayer {
+ 
+     private val tokenProvider =
+         object : TokenProvider {
+-            override val capabilities =
+-                TokenProviderCapabilities(
+-                    providers = setOf(PoTokenProviderKind.WEB_BOTGUARD),
+-                    usesWebView = true,
+-                )
++            override val capabilities: TokenProviderCapabilities
++                get() = tokenCapabilities(requireNotNull(applicationContext))
+ 
+             override suspend fun getPoToken(
+                 videoId: String,
+                 visitorData: String,
+                 cookie: String?,
+-            ): PoTokenResult? =
+-                poTokenGenerator.getWebClientPoToken(videoId, visitorData)?.let { token ->
++            ): PoTokenResult? {
++                if (PoTokenProviderKind.WEB_BOTGUARD !in capabilities.providers) return null
++                return poTokenGenerator.getWebClientPoToken(videoId, visitorData)?.let { token ->
+                     PoTokenResult(
+                         playerRequestToken = token.playerRequestPoToken,
+                         streamingDataToken = token.streamingDataPoToken,
+                         visitorData = visitorData,
+                     )
+                 }
++            }
+ 
+             override suspend fun close() {
+-                poTokenGenerator.close()
++                if (PoTokenProviderKind.WEB_BOTGUARD in capabilities.providers) poTokenGenerator.close()
+             }
+         }
+ 
++    internal fun tokenCapabilities(context: Context): TokenProviderCapabilities =
++        if (context.packageManager.hasSystemFeature(PackageManager.FEATURE_WATCH)) {
++            // Wear OS has no WebView; let the extractor select native playback clients.
++            TokenProviderCapabilities()
++        } else {
++            TokenProviderCapabilities(providers = setOf(PoTokenProviderKind.WEB_BOTGUARD), usesWebView = true)
++        }
++
+     private val logger =
+         InnerTubeLogger { event ->
+             val details = event.details.entries.joinToString(prefix = " [", postfix = "]") { "${it.key}=${it.value}" }
+diff --git a/app/src/main/kotlin/com/metrolist/music/viewmodels/HomeViewModel.kt b/app/src/main/kotlin/com/metrolist/music/viewmodels/HomeViewModel.kt
+index 118e2a68..b3d6e13f 100644
+--- a/app/src/main/kotlin/com/metrolist/music/viewmodels/HomeViewModel.kt
++++ b/app/src/main/kotlin/com/metrolist/music/viewmodels/HomeViewModel.kt
+@@ -14,7 +14,6 @@ import com.metrolist.innertube.models.Artist
+ import com.metrolist.innertube.models.ArtistItem
+ import com.metrolist.innertube.models.PlaylistItem
+ import com.metrolist.innertube.models.SongItem
+-import kotlinx.coroutines.flow.combine
+ import com.metrolist.innertube.models.WatchEndpoint
+ import com.metrolist.innertube.models.BrowseEndpoint
+ import com.metrolist.innertube.models.YTItem
+@@ -37,7 +36,6 @@ import com.metrolist.music.db.MusicDatabase
+ import com.metrolist.music.db.entities.Album
+ import com.metrolist.music.db.entities.LocalItem
+ import com.metrolist.music.db.entities.Song
+-import com.metrolist.music.db.entities.SpeedDialItem
+ import com.metrolist.music.extensions.filterVideoSongs
+ import com.metrolist.music.extensions.toEnum
+ import com.metrolist.music.models.SimilarRecommendation
+@@ -78,16 +76,6 @@ data class CommunityPlaylistItem(
+     val songs: List<SongItem>
+ )
+ 
+-internal fun buildSpeedDialItems(
+-    pinned: List<YTItem>,
+-    keepListening: List<YTItem>,
+-    quickPicks: List<YTItem>,
+-    home: List<YTItem>,
+-): List<YTItem> =
+-    (pinned + keepListening + quickPicks + home)
+-        .distinctBy { it.id }
+-        .take(27)
+-
+ @HiltViewModel
+ class HomeViewModel @Inject constructor(
+     @ApplicationContext val context: Context,
+@@ -124,63 +112,9 @@ class HomeViewModel @Inject constructor(
+     val allLocalItems = MutableStateFlow<List<LocalItem>>(emptyList())
+     val allYtItems = MutableStateFlow<List<YTItem>>(emptyList())
+ 
+-    val pinnedSpeedDialItems: StateFlow<List<SpeedDialItem>> =
+-        database.speedDialDao.getAll()
+-            .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+-
+-    val speedDialItems: StateFlow<List<YTItem>> =
+-        combine(
+-            database.speedDialDao.getAll(),
+-            keepListening,
+-            quickPicks,
+-            homePage,
+-        ) { pinned, keepListening, quick, home ->
+-            buildSpeedDialItems(
+-                pinned = pinned.map { it.toYTItem() },
+-                keepListening =
+-                    keepListening.orEmpty().mapNotNull { item ->
+-                        when (item) {
+-                            is Song ->
+-                                SongItem(
+-                                    id = item.id,
+-                                    title = item.title,
+-                                    artists = item.artists.map { Artist(name = it.name, id = it.id) },
+-                                    thumbnail = item.thumbnailUrl ?: "",
+-                                )
+-
+-                            is Album ->
+-                                AlbumItem(
+-                                    browseId = item.id,
+-                                    playlistId = item.album.playlistId ?: "",
+-                                    title = item.title,
+-                                    artists = item.artists.map { Artist(name = it.name, id = it.id) },
+-                                    year = item.album.year,
+-                                    thumbnail = item.thumbnailUrl ?: "",
+-                                )
+-
+-                            is com.metrolist.music.db.entities.Artist ->
+-                                ArtistItem(
+-                                    id = item.id,
+-                                    title = item.title,
+-                                    thumbnail = item.thumbnailUrl,
+-                                    shuffleEndpoint = null,
+-                                    radioEndpoint = null,
+-                                )
+-
+-                            else -> null
+-                        }
+-                    },
+-                quickPicks =
+-                    quick.orEmpty().map { song ->
+-                        SongItem(
+-                            id = song.id,
+-                            title = song.title,
+-                            artists = song.artists.map { Artist(name = it.name, id = it.id) },
+-                            thumbnail = song.thumbnailUrl ?: "",
+-                        )
+-                    },
+-                home = home?.sections.orEmpty().flatMap { it.items },
+-            )
++    val officialQuickPicks: StateFlow<List<SongItem>> =
++        homePage.map { page ->
++            youtubeQuickPicks(page, context.getString(com.metrolist.music.R.string.quick_picks))
+         }.stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+ 
+     suspend fun getRandomItem(): YTItem? {
+diff --git a/app/src/main/kotlin/com/metrolist/music/widget/PlaylistWidgetManager.kt b/app/src/main/kotlin/com/metrolist/music/widget/PlaylistWidgetManager.kt
+index f7c2a8ab..30730e5b 100644
+--- a/app/src/main/kotlin/com/metrolist/music/widget/PlaylistWidgetManager.kt
++++ b/app/src/main/kotlin/com/metrolist/music/widget/PlaylistWidgetManager.kt
+@@ -197,16 +197,6 @@ class PlaylistWidgetManager @Inject constructor(
+     @OptIn(FlowPreview::class)
+     private fun observeQuickPickChanges() {
+         combine(
+-            database.speedDialDao.getAll().map { items ->
+-                items.map { item ->
+-                    SpeedDialSnapshot(
+-                        type = item.type,
+-                        id = item.id,
+-                        title = item.title,
+-                        thumbnailUrl = item.thumbnailUrl,
+-                    )
+-                }
+-            },
+             database.playlistsByCreateDateAsc().map { playlists ->
+                 playlists.map { playlist ->
+                     PlaylistSnapshot(
+@@ -242,9 +232,8 @@ class PlaylistWidgetManager @Inject constructor(
+                     )
+                 }
+             },
+-        ) { speedDial, playlists, likedSongs, downloadedSongs, topSongs ->
++        ) { playlists, likedSongs, downloadedSongs, topSongs ->
+             QuickPickSnapshot(
+-                speedDial = speedDial,
+                 playlists = playlists,
+                 likedSongs = likedSongs,
+                 downloadedSongs = downloadedSongs,
+@@ -391,7 +380,6 @@ class PlaylistWidgetManager @Inject constructor(
+     }
+ 
+     private suspend fun buildQuickPicks(): List<QuickPick> = withContext(Dispatchers.IO) {
+-        val speedDialItemsDeferred = async { database.speedDialDao.getAll().first() }
+         val savedPlaylistsDeferred = async { database.playlistsByCreateDateAsc().first() }
+         val likedSongsDeferred = async { database.likedSongsByCreateDateAsc().first() }
+         val downloadedSongsDeferred = async { database.downloadedSongsByCreateDateAsc().first() }
+@@ -399,7 +387,6 @@ class PlaylistWidgetManager @Inject constructor(
+ 
+         val result = mutableListOf<QuickPick>()
+         val seen = mutableSetOf<String>()
+-        val speedDialItems = speedDialItemsDeferred.await()
+         val savedPlaylists = savedPlaylistsDeferred.await()
+         val likedSongs = likedSongsDeferred.await()
+         val downloadedSongs = downloadedSongsDeferred.await()
+@@ -409,41 +396,6 @@ class PlaylistWidgetManager @Inject constructor(
+             if (seen.add(item.key)) result += item
+         }
+ 
+-        speedDialItems
+-            .filter { it.type == "PLAYLIST" || it.type == "LOCAL_PLAYLIST" }
+-            .forEach { item ->
+-                if (item.type == "LOCAL_PLAYLIST") {
+-                    add(
+-                        QuickPick(
+-                            key = "local:${item.id}",
+-                            targetType = PlaylistWidgetReceiver.TARGET_TYPE_LOCAL,
+-                            targetId = item.id,
+-                            title = item.title,
+-                            thumbnailUrl = item.thumbnailUrl,
+-                            fallbackIconRes = R.drawable.playlist_play,
+-                        ),
+-                    )
+-                } else {
+-                    val saved = savedPlaylists.firstOrNull {
+-                        it.playlist.browseId == item.id || it.playlist.id == item.id
+-                    }
+-                    if (saved != null) {
+-                        add(saved.toQuickPick())
+-                    } else {
+-                        add(
+-                            QuickPick(
+-                                key = "online:${item.id}",
+-                                targetType = PlaylistWidgetReceiver.TARGET_TYPE_ONLINE,
+-                                targetId = item.id,
+-                                title = item.title,
+-                                thumbnailUrl = item.thumbnailUrl,
+-                                fallbackIconRes = R.drawable.playlist_play,
+-                            ),
+-                        )
+-                    }
+-                }
+-            }
+-
+         savedPlaylists
+             .filter { it.playlist.browseId == null || it.playlist.isLocal }
+             .forEach { add(it.toQuickPick()) }
+@@ -691,20 +643,12 @@ class PlaylistWidgetManager @Inject constructor(
+     )
+ 
+     private data class QuickPickSnapshot(
+-        val speedDial: List<SpeedDialSnapshot>,
+         val playlists: List<PlaylistSnapshot>,
+         val likedSongs: List<SongSnapshot>,
+         val downloadedSongs: List<SongSnapshot>,
+         val topSongs: List<SongSnapshot>,
+     )
+ 
+-    private data class SpeedDialSnapshot(
+-        val type: String,
+-        val id: String,
+-        val title: String,
+-        val thumbnailUrl: String?,
+-    )
+-
+     private data class PlaylistSnapshot(
+         val id: String,
+         val browseId: String?,
+diff --git a/app/src/main/res/values/metrolist_strings.xml b/app/src/main/res/values/metrolist_strings.xml
+index 345a9c27..ffc62983 100644
+--- a/app/src/main/res/values/metrolist_strings.xml
++++ b/app/src/main/res/values/metrolist_strings.xml
+@@ -994,4 +994,16 @@
+     <string name="stream_source_web_creator_desc">Creator web client.</string>
+     <string name="top_result">Top result</string>
+     <string name="other">Other</string>
++    <string name="watch_library">Library</string>
++    <string name="watch_start_listening">Search for a song to start listening</string>
++    <string name="watch_search_failed">Search failed. Check your connection and try again.</string>
++    <string name="watch_load_more">Load more</string>
++    <string name="watch_connecting">Connecting to player…</string>
++    <string name="watch_audio_hint">Use Bluetooth headphones or your watch speaker</string>
++    <string name="youtube_quick_picks_empty">YouTube Music has not returned Quick picks. Sign in to your YouTube Music account and refresh.</string>
++    <string name="youtube_quick_picks_failed">Could not load YouTube Music Quick picks. Check your connection and try again.</string>
++    <string name="watch_account_signed_in">Signed in on this watch</string>
++    <string name="watch_account_import_help">To use this watch’s own account, import its Metrolist login token here. Obtain the token from Account → Log in with token after signing into your chosen account on another device. Keep it private; it grants account access. The phone’s account is not synchronized.</string>
++    <string name="watch_refresh_recommendations">Refresh</string>
++    <string name="crash_report_saved_path">Crash log saved at:\n%1$s</string>
+ </resources>
+diff --git a/app/src/test/kotlin/com/metrolist/music/viewmodels/HomeSpeedDialTest.kt b/app/src/test/kotlin/com/metrolist/music/viewmodels/HomeSpeedDialTest.kt
+index 59da1148..fe47c1d6 100644
+--- a/app/src/test/kotlin/com/metrolist/music/viewmodels/HomeSpeedDialTest.kt
++++ b/app/src/test/kotlin/com/metrolist/music/viewmodels/HomeSpeedDialTest.kt
+@@ -1,26 +1,44 @@
+ package com.metrolist.music.viewmodels
+ 
+ import com.metrolist.innertube.models.SongItem
++import com.metrolist.innertube.pages.HomePage
+ import org.junit.Assert.assertEquals
++import org.junit.Assert.assertTrue
+ import org.junit.Test
+ 
+ class HomeSpeedDialTest {
+-    @Test
+-    fun `home recommendations fill sparse speed dial without replacing pinned items`() {
+-        val pinned = song("pinned")
+-        val home = song("home")
++    @Test fun `only official quick picks are shown in server order`() {
++        val first = song("first")
++        val second = song("second")
++        val page = HomePage(null, listOf(
++            section("Listen again", song("history")),
++            section("猜你喜欢", first, second, first.copy(title = "duplicate")),
++            section("Recommended albums", song("unrelated")),
++        ))
++        assertEquals(listOf(first, second), youtubeQuickPicks(page, "猜你喜欢"))
++    }
+ 
+-        val result =
+-            buildSpeedDialItems(
+-                pinned = listOf(pinned),
+-                keepListening = emptyList(),
+-                quickPicks = emptyList(),
+-                home = listOf(pinned.copy(title = "duplicate"), home),
+-            )
++    @Test fun `content language may differ from app language`() {
++        for (title in listOf("Quick picks", "猜你喜欢", "猜你喜歡", "歌曲快選", "快速選曲", "Test localized title")) {
++            val page = HomePage(null, listOf(section(title, song("official"))))
++            assertEquals(listOf("official"), youtubeQuickPicks(page, "Test localized title").map { it.id })
++        }
++    }
+ 
+-        assertEquals(listOf(pinned, home), result)
++    @Test fun `missing recommendation shelf never falls back to local or unrelated songs`() {
++        assertTrue(youtubeQuickPicks(null, "Quick picks").isEmpty())
++        assertTrue(youtubeQuickPicks(HomePage(null, listOf(section("Listen again", song("history")))), "Quick picks").isEmpty())
+     }
+ 
++    @Test fun `all official recommendations remain available across grid pages`() {
++        val songs = (1..40).map { song(it.toString()) }
++        val page = HomePage(null, listOf(HomePage.Section("Quick picks", null, null, null, songs)))
++        assertEquals(songs, youtubeQuickPicks(page, "Quick picks"))
++    }
++
++    private fun section(title: String, vararg songs: SongItem) =
++        HomePage.Section(title, null, null, null, songs.toList())
++
+     private fun song(id: String) =
+         SongItem(
+             id = id,
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModel.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModel.kt
+new file mode 100644
+index 00000000..1fa8ccb6
+--- /dev/null
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModel.kt
+@@ -0,0 +1,121 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.app.Application
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import androidx.lifecycle.AndroidViewModel
++import androidx.lifecycle.viewModelScope
++import com.metrolist.innertube.YouTube
++import com.metrolist.innertube.utils.parseCookieString
++import com.metrolist.music.constants.AccountChannelHandleKey
++import com.metrolist.music.constants.AccountEmailKey
++import com.metrolist.music.constants.AccountNameKey
++import com.metrolist.music.constants.DataSyncIdKey
++import com.metrolist.music.constants.InnerTubeAuthUserKey
++import com.metrolist.music.constants.InnerTubeCookieKey
++import com.metrolist.music.constants.UseLoginForBrowse
++import com.metrolist.music.constants.VisitorDataKey
++import com.metrolist.music.utils.safeDataStoreEdit
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.launch
++
++internal class WatchLoginToken(
++    val cookie: String,
++    val visitorData: String,
++    val dataSyncId: String,
++    val authUser: String,
++    val accountName: String,
++    val accountEmail: String,
++    val accountChannelHandle: String,
++)
++
++internal fun parseWatchLoginToken(text: String): WatchLoginToken? {
++    if (text.length > 32_768 || text.any { it == '\u0000' || it == '\r' }) return null
++    val fields = mutableMapOf<String, String>()
++    for (line in text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }) {
++        val parts = line.split(" =", limit = 2)
++        if (parts.size != 2 || fields.put(parts[0], parts[1].trim()) != null) return null
++    }
++    val cookie = fields["***INNERTUBE COOKIE***"].orEmpty()
++    val visitor = fields["***VISITOR DATA***"].orEmpty()
++    val authUser = fields["***AUTH USER***"] ?: "0"
++    if (parseCookieString(cookie)["SAPISID"].isNullOrBlank() || visitor.isBlank() || !authUser.matches(Regex("[0-9]{1,3}"))) return null
++    return WatchLoginToken(
++        cookie, visitor, fields["***DATASYNC ID***"].orEmpty(), authUser,
++        fields["***ACCOUNT NAME***"].orEmpty(), fields["***ACCOUNT EMAIL***"].orEmpty(),
++        fields["***ACCOUNT CHANNEL HANDLE***"].orEmpty(),
++    )
++}
++
++internal class WatchAccountViewModel(application: Application) : AndroidViewModel(application) {
++    var busy by mutableStateOf(false)
++        private set
++    var failed by mutableStateOf(false)
++        private set
++
++    fun signIn(text: String, onComplete: () -> Unit) {
++        val token = parseWatchLoginToken(text)
++        if (token == null) { failed = true; return }
++        if (busy) return
++        busy = true
++        failed = false
++        viewModelScope.launch {
++            try {
++                val saved = getApplication<Application>().safeDataStoreEdit { settings ->
++                    settings[InnerTubeCookieKey] = token.cookie
++                    settings[VisitorDataKey] = token.visitorData
++                    settings[DataSyncIdKey] = token.dataSyncId
++                    settings[InnerTubeAuthUserKey] = token.authUser
++                    settings[AccountNameKey] = token.accountName
++                    settings[AccountEmailKey] = token.accountEmail
++                    settings[AccountChannelHandleKey] = token.accountChannelHandle
++                    settings[UseLoginForBrowse] = true
++                }
++                check(saved)
++                YouTube.cookie = token.cookie
++                YouTube.visitorData = token.visitorData
++                YouTube.dataSyncId = token.dataSyncId
++                YouTube.authUser = token.authUser
++                YouTube.useLoginForBrowse = true
++                onComplete()
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++                failed = true
++            } finally {
++                busy = false
++            }
++        }
++    }
++
++    fun signOut(onComplete: () -> Unit) {
++        if (busy) return
++        busy = true
++        failed = false
++        viewModelScope.launch {
++            try {
++                check(getApplication<Application>().safeDataStoreEdit { settings ->
++                    settings.remove(InnerTubeCookieKey)
++                    settings.remove(VisitorDataKey)
++                    settings.remove(DataSyncIdKey)
++                    settings.remove(InnerTubeAuthUserKey)
++                    settings.remove(AccountNameKey)
++                    settings.remove(AccountEmailKey)
++                    settings.remove(AccountChannelHandleKey)
++                })
++                YouTube.cookie = null
++                YouTube.visitorData = null
++                YouTube.dataSyncId = null
++                YouTube.authUser = "0"
++                onComplete()
++            } catch (error: CancellationException) {
++                throw error
++            } catch (_: Exception) {
++                failed = true
++            } finally {
++                busy = false
++            }
++        }
++    }
++}
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchApp.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchApp.kt
+new file mode 100644
+index 00000000..2eb69a14
+--- /dev/null
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchApp.kt
+@@ -0,0 +1,462 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.app.Activity
++import android.content.Context
++import android.content.ContextWrapper
++import android.view.WindowManager
++import androidx.activity.compose.BackHandler
++import androidx.annotation.DrawableRes
++import androidx.compose.foundation.background
++import androidx.compose.foundation.clickable
++import androidx.compose.foundation.focusable
++import androidx.compose.foundation.gestures.scrollBy
++import androidx.compose.foundation.layout.Arrangement
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.Column
++import androidx.compose.foundation.layout.PaddingValues
++import androidx.compose.foundation.layout.Row
++import androidx.compose.foundation.layout.fillMaxSize
++import androidx.compose.foundation.layout.fillMaxWidth
++import androidx.compose.foundation.layout.heightIn
++import androidx.compose.foundation.layout.padding
++import androidx.compose.foundation.layout.size
++import androidx.compose.foundation.lazy.LazyColumn
++import androidx.compose.foundation.lazy.LazyListScope
++import androidx.compose.foundation.lazy.itemsIndexed
++import androidx.compose.foundation.lazy.rememberLazyListState
++import androidx.compose.foundation.shape.CircleShape
++import androidx.compose.foundation.shape.RoundedCornerShape
++import androidx.compose.foundation.text.KeyboardActions
++import androidx.compose.foundation.text.KeyboardOptions
++import androidx.compose.material3.Button
++import androidx.compose.material3.CircularProgressIndicator
++import androidx.compose.material3.Icon
++import androidx.compose.material3.IconButton
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.LocalContentColor
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Surface
++import androidx.compose.material3.Text
++import androidx.compose.runtime.Composable
++import androidx.compose.runtime.LaunchedEffect
++import androidx.compose.runtime.DisposableEffect
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.remember
++import androidx.compose.runtime.rememberCoroutineScope
++import androidx.compose.runtime.saveable.rememberSaveable
++import androidx.compose.runtime.setValue
++import androidx.compose.ui.Alignment
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.draw.clip
++import androidx.compose.ui.focus.FocusRequester
++import androidx.compose.ui.focus.focusRequester
++import androidx.compose.ui.graphics.Color
++import androidx.compose.ui.input.rotary.onRotaryScrollEvent
++import androidx.compose.ui.platform.LocalFocusManager
++import androidx.compose.ui.platform.LocalContext
++import androidx.compose.ui.layout.ContentScale
++import androidx.compose.ui.res.painterResource
++import androidx.compose.ui.res.stringResource
++import androidx.compose.ui.text.input.ImeAction
++import androidx.compose.ui.text.input.KeyboardType
++import androidx.compose.ui.text.input.PasswordVisualTransformation
++import androidx.compose.ui.text.style.TextAlign
++import androidx.compose.ui.text.style.TextOverflow
++import androidx.compose.ui.unit.dp
++import androidx.lifecycle.compose.collectAsStateWithLifecycle
++import androidx.lifecycle.viewmodel.compose.viewModel
++import androidx.media3.common.Player
++import androidx.media3.exoplayer.offline.Download
++import coil3.compose.AsyncImage
++import com.metrolist.music.R
++import com.metrolist.music.constants.SongSortType
++import com.metrolist.music.constants.AccountNameKey
++import com.metrolist.music.constants.InnerTubeCookieKey
++import com.metrolist.music.db.MusicDatabase
++import com.metrolist.music.extensions.toMediaItem
++import com.metrolist.music.models.MediaMetadata
++import com.metrolist.music.models.toMediaMetadata
++import com.metrolist.music.playback.DownloadUtil
++import com.metrolist.music.playback.PlayerConnection
++import com.metrolist.music.playback.queues.ListQueue
++import com.metrolist.music.utils.rememberPreference
++import kotlinx.coroutines.launch
++
++@Composable
++fun WatchApp(playerConnection: PlayerConnection?, database: MusicDatabase, downloadUtil: DownloadUtil) {
++    if (playerConnection == null) {
++        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
++            Text(stringResource(R.string.watch_connecting), color = Color.White)
++        }
++        return
++    }
++    val metadata by playerConnection.mediaMetadata.collectAsStateWithLifecycle()
++    val playing by playerConnection.isPlaying.collectAsStateWithLifecycle()
++    val ready by playerConnection.service.isPlayerReady.collectAsStateWithLifecycle()
++    val canNext by playerConnection.canSkipNext.collectAsStateWithLifecycle()
++    val canPrevious by playerConnection.canSkipPrevious.collectAsStateWithLifecycle()
++    val playbackError by playerConnection.error.collectAsStateWithLifecycle()
++    val playbackState by playerConnection.playbackState.collectAsStateWithLifecycle()
++    val currentSong by playerConnection.currentSong.collectAsStateWithLifecycle()
++    val downloadRecords by downloadUtil.downloads.collectAsStateWithLifecycle()
++    val library by remember(database) { database.songs(SongSortType.NAME, false) }
++        .collectAsStateWithLifecycle(initialValue = emptyList())
++    val downloads by remember(database) { database.downloadedSongs(SongSortType.NAME, false) }
++        .collectAsStateWithLifecycle(initialValue = emptyList())
++    val search: WatchSearchViewModel = viewModel()
++    val recommendations: WatchRecommendationsViewModel = viewModel()
++    val account: WatchAccountViewModel = viewModel()
++    val accountName by rememberPreference(AccountNameKey, "")
++    val cookie by rememberPreference(InnerTubeCookieKey, "")
++    val quickPicksTitle = stringResource(R.string.quick_picks)
++    LaunchedEffect(quickPicksTitle, cookie) {
++        recommendations.reset()
++        recommendations.refresh(quickPicksTitle)
++    }
++    WatchContent(
++        metadata = metadata,
++        playing = playing,
++        ready = ready,
++        canNext = canNext,
++        canPrevious = canPrevious,
++        buffering = playbackState == Player.STATE_BUFFERING,
++        playbackError = playbackError?.localizedMessage,
++        inLibrary = currentSong?.song?.inLibrary != null,
++        downloadState = downloadRecords[metadata?.id]?.state,
++        library = library.map { it.toMediaMetadata() },
++        downloads = downloads.map { it.toMediaMetadata() },
++        search = search.state,
++        recommendations = recommendations.state,
++        onRefreshRecommendations = { recommendations.refresh(quickPicksTitle) },
++        accountName = accountName,
++        signedIn = cookie.isNotBlank(),
++        accountBusy = account.busy,
++        accountFailed = account.failed,
++        onSignIn = { token, done ->
++            account.signIn(token) {
++                recommendations.reset()
++                recommendations.refresh(quickPicksTitle)
++                done()
++            }
++        },
++        onSignOut = {
++            account.signOut {
++                recommendations.reset()
++                recommendations.refresh(quickPicksTitle)
++            }
++        },
++        onSearch = search::search,
++        onLoadMore = search::loadMore,
++        onRetry = search::retry,
++        onPlay = { songs, index ->
++            playerConnection.playQueue(ListQueue(items = songs.map { it.toMediaItem() }, startIndex = index))
++        },
++        onTogglePlayback = playerConnection::togglePlayPause,
++        onPrevious = playerConnection::seekToPrevious,
++        onNext = playerConnection::seekToNext,
++        onSave = playerConnection::toggleLibrary,
++        onDownload = { metadata?.let(downloadUtil::download) },
++    )
++}
++
++@Composable
++internal fun WatchContent(
++    metadata: MediaMetadata?,
++    playing: Boolean,
++    ready: Boolean,
++    canNext: Boolean,
++    canPrevious: Boolean,
++    buffering: Boolean,
++    playbackError: String?,
++    inLibrary: Boolean,
++    downloadState: Int?,
++    library: List<MediaMetadata>,
++    downloads: List<MediaMetadata>,
++    search: WatchSearchState,
++    recommendations: WatchRecommendationsState,
++    onRefreshRecommendations: () -> Unit,
++    onSearch: (String) -> Unit,
++    onLoadMore: () -> Unit,
++    onRetry: () -> Unit,
++    onPlay: (List<MediaMetadata>, Int) -> Unit,
++    onTogglePlayback: () -> Unit,
++    onPrevious: () -> Unit,
++    onNext: () -> Unit,
++    onSave: () -> Unit,
++    onDownload: () -> Unit,
++    accountName: String = "",
++    signedIn: Boolean = false,
++    accountBusy: Boolean = false,
++    accountFailed: Boolean = false,
++    onSignIn: (String, () -> Unit) -> Unit = { _, _ -> },
++    onSignOut: () -> Unit = {},
++) {
++    var page by rememberSaveable { mutableStateOf("player") }
++    var query by rememberSaveable { mutableStateOf("") }
++    val focus = LocalFocusManager.current
++    var token by remember { mutableStateOf("") }
++    val context = LocalContext.current
++    LaunchedEffect(page) { if (page != "account") token = "" }
++    DisposableEffect(page == "account", context) {
++        val accountPage = page == "account"
++        val window = findWatchActivity(context)?.window
++        val alreadySecure = window?.attributes?.flags?.and(WindowManager.LayoutParams.FLAG_SECURE) != 0
++        if (accountPage) window?.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
++        onDispose {
++            if (accountPage && !alreadySecure) window?.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
++        }
++    }
++    BackHandler(page != "player") { page = "player" }
++    WatchList(page) {
++        if (page != "player") {
++            item {
++                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
++                    WatchControl(R.drawable.arrow_back, stringResource(R.string.back), onClick = { page = "player" })
++                }
++            }
++        }
++        when (page) {
++            "player" -> {
++                item {
++                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
++                        Text(stringResource(R.string.now_playing), style = MaterialTheme.typography.labelMedium)
++                        Row(
++                            Modifier.fillMaxWidth().padding(vertical = 6.dp),
++                            verticalAlignment = Alignment.CenterVertically,
++                            horizontalArrangement = Arrangement.spacedBy(6.dp),
++                        ) {
++                            metadata?.thumbnailUrl?.let { url ->
++                                AsyncImage(url, null, Modifier.size(32.dp).clip(CircleShape), contentScale = ContentScale.Crop)
++                            }
++                            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
++                                Text(
++                                    metadata?.title ?: stringResource(R.string.watch_start_listening),
++                                    textAlign = TextAlign.Center,
++                                    maxLines = 2,
++                                    overflow = TextOverflow.Ellipsis,
++                                    style = MaterialTheme.typography.titleSmall,
++                                )
++                                metadata?.let {
++                                    Text(it.artists.joinToString { artist -> artist.name }, maxLines = 1,
++                                        overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
++                                }
++                            }
++                        }
++                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
++                            WatchControl(R.drawable.skip_previous, stringResource(R.string.previous), ready && metadata != null && canPrevious, onPrevious)
++                            WatchControl(
++                                if (playing) R.drawable.pause else R.drawable.play,
++                                stringResource(if (playing) R.string.pause else R.string.play),
++                                ready && metadata != null, onTogglePlayback, prominent = true,
++                            )
++                            WatchControl(R.drawable.skip_next, stringResource(R.string.next), ready && metadata != null && canNext, onNext)
++                        }
++                        if (buffering) CircularProgressIndicator(Modifier.padding(6.dp).size(20.dp))
++                        playbackError?.let {
++                            Text(it, color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center,
++                                style = MaterialTheme.typography.bodySmall)
++                        }
++                    }
++                }
++                item { WatchButton(stringResource(R.string.quick_picks), onClick = { page = "recommendations" }) }
++                item { WatchButton(stringResource(R.string.search), onClick = { page = "search" }) }
++                item { WatchButton(stringResource(R.string.watch_library), onClick = { page = "library" }) }
++                item { WatchButton(stringResource(R.string.downloaded_songs), onClick = { page = "downloads" }) }
++                item { WatchButton(stringResource(R.string.account), onClick = { page = "account" }) }
++                if (metadata != null) {
++                    item { WatchButton(stringResource(if (inLibrary) R.string.remove_from_library else R.string.add_to_library), ready, onSave) }
++                    item {
++                        val pending = downloadState != null && downloadState != Download.STATE_FAILED && downloadState != Download.STATE_COMPLETED
++                        WatchButton(
++                            stringResource(when {
++                                downloadState == Download.STATE_COMPLETED -> R.string.downloaded_songs
++                                pending -> R.string.downloading
++                                else -> R.string.download_desc
++                            }),
++                            ready && !pending && downloadState != Download.STATE_COMPLETED,
++                            onDownload,
++                        )
++                    }
++                }
++                item {
++                    Text(stringResource(R.string.watch_audio_hint), textAlign = TextAlign.Center,
++                        style = MaterialTheme.typography.bodySmall)
++                }
++            }
++            "account" -> {
++                item { Text(stringResource(R.string.account), textAlign = TextAlign.Center) }
++                if (signedIn) {
++                    item { Text(accountName.ifBlank { stringResource(R.string.watch_account_signed_in) }, textAlign = TextAlign.Center) }
++                    item { WatchButton(stringResource(R.string.action_logout), !accountBusy, onSignOut) }
++                }
++                item { Text(stringResource(R.string.watch_account_import_help), style = MaterialTheme.typography.bodySmall) }
++                item {
++                    OutlinedTextField(
++                        value = token, onValueChange = { if (it.length <= 32_768) token = it },
++                        modifier = Modifier.fillMaxWidth(),
++                        enabled = !accountBusy,
++                        label = { Text(stringResource(R.string.advanced_login)) },
++                        visualTransformation = PasswordVisualTransformation(),
++                        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
++                        maxLines = 3,
++                    )
++                }
++                item {
++                    WatchButton(stringResource(R.string.save), !accountBusy && parseWatchLoginToken(token) != null) {
++                        focus.clearFocus()
++                        onSignIn(token) { token = ""; page = "recommendations" }
++                    }
++                }
++                if (accountBusy) {
++                    item { CircularProgressIndicator(Modifier.size(24.dp)) }
++                }
++                if (accountFailed) {
++                    item { Text(stringResource(R.string.login_failed), color = MaterialTheme.colorScheme.error) }
++                }
++            }
++            "recommendations" -> {
++                item { Text(stringResource(R.string.quick_picks), textAlign = TextAlign.Center) }
++                if (recommendations.songs.isNotEmpty()) {
++                    item {
++                        WatchButton(stringResource(R.string.play_all), ready) {
++                            onPlay(recommendations.songs, 0)
++                            page = "player"
++                        }
++                    }
++                }
++                songRows(recommendations.songs, ready) { index ->
++                    onPlay(recommendations.songs, index)
++                    page = "player"
++                }
++                if (recommendations.loading) {
++                    item {
++                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
++                            CircularProgressIndicator(Modifier.size(24.dp))
++                        }
++                    }
++                } else {
++                    if (recommendations.failed || recommendations.songs.isEmpty()) {
++                        item {
++                            Text(stringResource(if (recommendations.failed) R.string.youtube_quick_picks_failed else R.string.youtube_quick_picks_empty), textAlign = TextAlign.Center)
++                        }
++                    }
++                    if (!signedIn) {
++                        item { WatchButton(stringResource(R.string.login), onClick = { page = "account" }) }
++                    }
++                    item {
++                        WatchButton(
++                            stringResource(if (recommendations.failed) R.string.retry else R.string.watch_refresh_recommendations),
++                            onClick = onRefreshRecommendations,
++                        )
++                    }
++                }
++            }
++            "search" -> {
++                item {
++                    OutlinedTextField(
++                        value = query, onValueChange = { query = it },
++                        modifier = Modifier.fillMaxWidth(), singleLine = true,
++                        label = { Text(stringResource(R.string.search)) },
++                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
++                        keyboardActions = KeyboardActions(onSearch = { focus.clearFocus(); onSearch(query) }),
++                    )
++                }
++                item {
++                    WatchButton(stringResource(R.string.search), query.isNotBlank()) {
++                        focus.clearFocus()
++                        onSearch(query)
++                    }
++                }
++                val songs = search.songs.map { it.toMediaMetadata() }
++                songRows(songs, ready) { index -> onPlay(songs, index); page = "player" }
++                if (search.loading) {
++                    item { Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { CircularProgressIndicator(Modifier.size(24.dp)) } }
++                } else if (search.failed) {
++                    item { Text(stringResource(R.string.watch_search_failed), textAlign = TextAlign.Center) }
++                    item { WatchButton(stringResource(R.string.retry), onClick = onRetry) }
++                } else if (search.query.isNotEmpty() && songs.isEmpty()) {
++                    item { Text(stringResource(R.string.no_results_found), textAlign = TextAlign.Center) }
++                }
++                if (!search.loading && !search.failed && search.continuation != null) {
++                    item { WatchButton(stringResource(R.string.watch_load_more), onClick = onLoadMore) }
++                }
++            }
++            else -> {
++                val songs = if (page == "downloads") downloads else library
++                item { Text(stringResource(if (page == "downloads") R.string.downloaded_songs else R.string.watch_library), textAlign = TextAlign.Center) }
++                if (songs.isEmpty()) {
++                    item { Text(stringResource(R.string.library_song_empty), textAlign = TextAlign.Center) }
++                }
++                songRows(songs, ready) { index -> onPlay(songs, index); page = "player" }
++            }
++        }
++    }
++}
++
++private fun findWatchActivity(context: Context): Activity? {
++    var current = context
++    while (current is ContextWrapper) {
++        if (current is Activity) return current
++        current = current.baseContext
++    }
++    return null
++}
++
++@Composable
++private fun WatchList(page: String, content: LazyListScope.() -> Unit) {
++    val state = rememberLazyListState()
++    val focus = remember { FocusRequester() }
++    val scope = rememberCoroutineScope()
++    LaunchedEffect(page) { state.scrollToItem(0); focus.requestFocus() }
++    Surface(Modifier.fillMaxSize(), color = Color.Black, contentColor = Color.White) {
++        LazyColumn(
++            state = state,
++            modifier = Modifier.fillMaxSize().focusRequester(focus)
++                .onRotaryScrollEvent { event ->
++                    scope.launch { state.scrollBy(event.verticalScrollPixels) }
++                    true
++                }
++                .focusable(),
++            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 32.dp),
++            verticalArrangement = Arrangement.spacedBy(8.dp),
++            horizontalAlignment = Alignment.CenterHorizontally,
++            content = content,
++        )
++    }
++}
++
++@Composable
++private fun WatchButton(text: String, enabled: Boolean = true, onClick: () -> Unit) {
++    Button(onClick = onClick, enabled = enabled, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
++        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)) {
++        Text(text, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis)
++    }
++}
++
++@Composable
++private fun WatchControl(@DrawableRes icon: Int, label: String, enabled: Boolean = true, onClick: () -> Unit, prominent: Boolean = false) {
++    IconButton(onClick = onClick, enabled = enabled,
++        modifier = Modifier.size(48.dp).background(if (prominent) MaterialTheme.colorScheme.primaryContainer else Color.Transparent, CircleShape)) {
++        Icon(
++            painterResource(icon), label, Modifier.size(26.dp),
++            tint = if (prominent) MaterialTheme.colorScheme.onPrimaryContainer else LocalContentColor.current,
++        )
++    }
++}
++
++private fun LazyListScope.songRows(songs: List<MediaMetadata>, enabled: Boolean, onClick: (Int) -> Unit) {
++    itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
++        Column(
++            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
++                .background(MaterialTheme.colorScheme.surfaceContainer)
++                .clickable(enabled = enabled) { onClick(index) }
++                .padding(horizontal = 12.dp, vertical = 10.dp).heightIn(min = 36.dp),
++            verticalArrangement = Arrangement.Center,
++        ) {
++            Text(song.title, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
++            Text(song.artists.joinToString { it.name }, style = MaterialTheme.typography.bodySmall,
++                maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
++        }
++    }
++}
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModel.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModel.kt
+new file mode 100644
+index 00000000..4a0bace4
+--- /dev/null
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModel.kt
+@@ -0,0 +1,54 @@
++package com.metrolist.music.ui.screens.watch
++
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import com.metrolist.innertube.YouTube
++import com.metrolist.innertube.pages.HomePage
++import com.metrolist.music.models.MediaMetadata
++import com.metrolist.music.models.toMediaMetadata
++import com.metrolist.music.viewmodels.youtubeQuickPicks
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.ensureActive
++import kotlinx.coroutines.launch
++
++internal data class WatchRecommendationsState(
++    val songs: List<MediaMetadata> = emptyList(),
++    val loading: Boolean = false,
++    val failed: Boolean = false,
++)
++
++internal class WatchRecommendationsViewModel(
++    private val loadHome: suspend () -> Result<HomePage> = { YouTube.home() },
++) : ViewModel() {
++    var state by mutableStateOf(WatchRecommendationsState())
++        private set
++    private var request: Job? = null
++
++    fun reset() {
++        request?.cancel()
++        state = WatchRecommendationsState()
++    }
++
++    fun refresh(localizedTitle: String) {
++        if (state.loading) return
++        state = state.copy(loading = true, failed = false)
++        request = viewModelScope.launch {
++            val result = loadHome()
++            currentCoroutineContext().ensureActive()
++            result.fold(
++                onSuccess = { page ->
++                    state = WatchRecommendationsState(youtubeQuickPicks(page, localizedTitle).map { it.toMediaMetadata() })
++                },
++                onFailure = { error ->
++                    if (error is CancellationException) throw error
++                    state = state.copy(loading = false, failed = true)
++                },
++            )
++        }
++    }
++}
+diff --git a/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModel.kt b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModel.kt
+new file mode 100644
+index 00000000..24473a3f
+--- /dev/null
++++ b/app/src/main/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModel.kt
+@@ -0,0 +1,73 @@
++package com.metrolist.music.ui.screens.watch
++
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.setValue
++import androidx.lifecycle.ViewModel
++import androidx.lifecycle.viewModelScope
++import com.metrolist.innertube.YouTube
++import com.metrolist.innertube.models.SongItem
++import com.metrolist.innertube.pages.SearchResult
++import kotlinx.coroutines.CancellationException
++import kotlinx.coroutines.Job
++import kotlinx.coroutines.currentCoroutineContext
++import kotlinx.coroutines.ensureActive
++import kotlinx.coroutines.launch
++
++internal data class WatchSearchState(
++    val query: String = "",
++    val songs: List<SongItem> = emptyList(),
++    val continuation: String? = null,
++    val loading: Boolean = false,
++    val failed: Boolean = false,
++)
++
++internal class WatchSearchViewModel(
++    private val searchSongs: suspend (String) -> Result<SearchResult> = {
++        YouTube.search(it, YouTube.SearchFilter.FILTER_SONG)
++    },
++    private val nextPage: suspend (String) -> Result<SearchResult> = {
++        YouTube.searchContinuation(it)
++    },
++) : ViewModel() {
++    var state by mutableStateOf(WatchSearchState())
++        private set
++    private var request: Job? = null
++
++    fun search(query: String) {
++        request?.cancel()
++        val trimmed = query.trim()
++        state = WatchSearchState(query = trimmed, loading = trimmed.isNotEmpty())
++        if (trimmed.isEmpty()) return
++        request = viewModelScope.launch { complete(searchSongs(trimmed)) }
++    }
++
++    fun loadMore() {
++        val continuation = state.continuation ?: return
++        if (state.loading) return
++        state = state.copy(loading = true, failed = false)
++        request = viewModelScope.launch { complete(nextPage(continuation)) }
++    }
++
++    private suspend fun complete(result: Result<SearchResult>) {
++        currentCoroutineContext().ensureActive()
++        result.fold(
++            onSuccess = { page ->
++                state = state.copy(
++                    songs = (state.songs + page.items.filterIsInstance<SongItem>()).distinctBy { it.id },
++                    continuation = page.continuation,
++                    loading = false,
++                    failed = false,
++                )
++            },
++            onFailure = { error ->
++                if (error is CancellationException) throw error
++                state = state.copy(loading = false, failed = true)
++            },
++        )
++    }
++
++    fun retry() {
++        if (state.continuation != null) loadMore() else search(state.query)
++    }
++}
+diff --git a/app/src/main/kotlin/com/metrolist/music/viewmodels/YouTubeQuickPicks.kt b/app/src/main/kotlin/com/metrolist/music/viewmodels/YouTubeQuickPicks.kt
+new file mode 100644
+index 00000000..f5bb1595
+--- /dev/null
++++ b/app/src/main/kotlin/com/metrolist/music/viewmodels/YouTubeQuickPicks.kt
+@@ -0,0 +1,15 @@
++package com.metrolist.music.viewmodels
++
++import com.metrolist.innertube.models.SongItem
++import com.metrolist.innertube.pages.HomePage
++
++internal fun youtubeQuickPicksSection(page: HomePage?, localizedTitle: String): HomePage.Section? {
++    // Shelf titles follow the YouTube content language, which may differ from the app language.
++    val titles = setOf(localizedTitle, "Quick picks", "猜你喜欢", "猜你喜歡", "歌曲快選", "快速選曲")
++    return page?.sections?.firstOrNull { section -> titles.any { it.equals(section.title.trim(), ignoreCase = true) } }
++}
++
++internal fun youtubeQuickPicks(page: HomePage?, localizedTitle: String): List<SongItem> =
++    youtubeQuickPicksSection(page, localizedTitle)?.items.orEmpty()
++        .filterIsInstance<SongItem>()
++        .distinctBy { it.id }
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/HomeQuickPicksOrderTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/HomeQuickPicksOrderTest.kt
+new file mode 100644
+index 00000000..36795f24
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/HomeQuickPicksOrderTest.kt
+@@ -0,0 +1,18 @@
++package com.metrolist.music.ui.screens
++
++import org.junit.Assert.assertEquals
++import org.junit.Test
++
++class HomeQuickPicksOrderTest {
++    @Test fun `official quick picks occupies the old first section even after randomizing`() {
++        val other = listOf(HomeSection.KeepListening, HomeSection.DailyDiscover, HomeSection.HomePageSection(0))
++        assertEquals(listOf(HomeSection.QuickPicks) + other, quickPicksFirst(other + HomeSection.QuickPicks))
++    }
++
++    @Test fun `official quick picks appears once while other section order is preserved`() {
++        assertEquals(
++            listOf(HomeSection.QuickPicks, HomeSection.DailyDiscover, HomeSection.KeepListening),
++            quickPicksFirst(listOf(HomeSection.QuickPicks, HomeSection.DailyDiscover, HomeSection.QuickPicks, HomeSection.KeepListening)),
++        )
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModelTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModelTest.kt
+new file mode 100644
+index 00000000..b60f9b51
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAccountViewModelTest.kt
+@@ -0,0 +1,65 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.app.Application
++import androidx.datastore.preferences.core.stringPreferencesKey
++import androidx.test.core.app.ApplicationProvider
++import com.metrolist.innertube.YouTube
++import com.metrolist.music.constants.AccountNameKey
++import com.metrolist.music.constants.InnerTubeCookieKey
++import com.metrolist.music.constants.UseLoginForBrowse
++import com.metrolist.music.utils.dataStore
++import com.metrolist.music.utils.safeDataStoreEdit
++import kotlinx.coroutines.CompletableDeferred
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.flow.first
++import kotlinx.coroutines.test.StandardTestDispatcher
++import kotlinx.coroutines.test.resetMain
++import kotlinx.coroutines.test.runTest
++import kotlinx.coroutines.test.setMain
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [33], application = Application::class)
++@OptIn(ExperimentalCoroutinesApi::class)
++class WatchAccountViewModelTest {
++    private val dispatcher = StandardTestDispatcher()
++    @Before fun setUp() { Dispatchers.setMain(dispatcher) }
++    @After fun tearDown() {
++        Dispatchers.resetMain()
++        YouTube.cookie = null
++        YouTube.visitorData = null
++        YouTube.dataSyncId = null
++        YouTube.authUser = "0"
++    }
++
++    @Test fun `watch persists its selected account and logout preserves unrelated preferences`() = runTest(dispatcher) {
++        val app = ApplicationProvider.getApplicationContext<Application>()
++        val localKey = stringPreferencesKey("watch-local-test")
++        app.safeDataStoreEdit { it[localKey] = "keep" }
++        val model = WatchAccountViewModel(app)
++        val imported = CompletableDeferred<Unit>()
++        model.signIn("***INNERTUBE COOKIE*** =SAPISID=test-session\n***VISITOR DATA*** =test-visitor\n***ACCOUNT NAME*** =Watch account") {
++            imported.complete(Unit)
++        }
++        imported.await()
++        val saved = app.dataStore.data.first()
++        assertEquals("SAPISID=test-session", saved[InnerTubeCookieKey])
++        assertEquals("Watch account", saved[AccountNameKey])
++        assertEquals(true, saved[UseLoginForBrowse])
++        assertEquals("SAPISID=test-session", YouTube.cookie)
++        val removed = CompletableDeferred<Unit>()
++        model.signOut { removed.complete(Unit) }
++        removed.await()
++        val signedOut = app.dataStore.data.first()
++        assertNull(signedOut[InnerTubeCookieKey])
++        assertNull(YouTube.cookie)
++        assertEquals("keep", signedOut[localKey])
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAppStartupTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAppStartupTest.kt
+new file mode 100644
+index 00000000..d347f1b0
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchAppStartupTest.kt
+@@ -0,0 +1,65 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.content.ComponentName
++import android.content.pm.PackageManager
++import androidx.activity.compose.setContent
++import androidx.compose.material3.Text
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.junit4.createAndroidComposeRule
++import androidx.compose.ui.test.onNodeWithText
++import androidx.lifecycle.lifecycleScope
++import androidx.test.core.app.ApplicationProvider
++import com.metrolist.music.App
++import com.metrolist.music.MainActivity
++import com.metrolist.music.playback.MusicService
++import com.metrolist.music.playback.PlayerConnection
++import com.metrolist.music.ui.theme.MetrolistTheme
++import com.metrolist.music.utils.InnerTubeXPlayer
++import org.junit.Assert.assertTrue
++import org.junit.Rule
++import org.junit.Test
++import org.junit.rules.ExternalResource
++import org.junit.rules.RuleChain
++import org.junit.runner.RunWith
++import org.robolectric.Robolectric
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [34, 36], application = App::class, qualifiers = "w192dp-h192dp-round-watch")
++class WatchAppStartupTest {
++    private lateinit var connection: PlayerConnection
++    private val compose = createAndroidComposeRule<MainActivity>()
++    @get:Rule val rules = RuleChain.outerRule(object : ExternalResource() {
++        override fun before() {
++            val app = ApplicationProvider.getApplicationContext<App>()
++            shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_WATCH, true)
++            // Robolectric has no Android service binding; exercise local playback directly.
++            shadowOf(app).declareComponentUnbindable(ComponentName(app, MusicService::class.java))
++            InnerTubeXPlayer.initialize(app)
++        }
++    }).around(compose)
++
++    @Test fun `production watch screen renders and observes the initialized player`() {
++        val service = Robolectric.buildService(MusicService::class.java).create()
++        val host = compose.activity
++        try {
++            compose.runOnUiThread {
++                connection = PlayerConnection(host, service.get().MusicBinder(), host.database, host.lifecycleScope)
++                host.setContent {
++                    MetrolistTheme(darkTheme = true, pureBlack = true) {
++                        WatchApp(connection, host.database, host.downloadUtil)
++                    }
++                }
++            }
++            compose.onNodeWithText("Now Playing").assertIsDisplayed()
++            compose.runOnIdle { assertTrue(connection.mediaMetadata.subscriptionCount.value > 0) }
++        } finally {
++            compose.runOnUiThread { host.setContent { Text("Finished") } }
++            compose.waitForIdle()
++            compose.runOnUiThread { if (::connection.isInitialized) connection.dispose() }
++            service.destroy()
++        }
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchContentTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchContentTest.kt
+new file mode 100644
+index 00000000..f787801e
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchContentTest.kt
+@@ -0,0 +1,120 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.graphics.Bitmap
++import androidx.compose.foundation.layout.Box
++import androidx.compose.foundation.layout.size
++import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.darkColorScheme
++import androidx.compose.ui.Modifier
++import androidx.compose.ui.graphics.asAndroidBitmap
++import androidx.compose.ui.test.assertIsDisplayed
++import androidx.compose.ui.test.assertIsNotEnabled
++import androidx.compose.ui.test.captureToImage
++import androidx.compose.ui.test.hasScrollToIndexAction
++import androidx.compose.ui.test.hasText
++import androidx.compose.ui.test.junit4.createComposeRule
++import androidx.compose.ui.test.onNodeWithContentDescription
++import androidx.compose.ui.test.onNodeWithText
++import androidx.compose.ui.test.onRoot
++import androidx.compose.ui.test.performClick
++import androidx.compose.ui.test.performTextInput
++import androidx.compose.ui.test.performScrollToNode
++import androidx.compose.ui.unit.dp
++import com.metrolist.music.models.MediaMetadata
++import org.junit.Assert.assertEquals
++import org.junit.Rule
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import org.robolectric.annotation.GraphicsMode
++import java.io.File
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [33], application = android.app.Application::class, qualifiers = "w192dp-h192dp-round")
++@GraphicsMode(GraphicsMode.Mode.NATIVE)
++class WatchContentTest {
++    @get:Rule val compose = createComposeRule()
++    private val song = MediaMetadata("song", "Test song with a long title", emptyList(), 180, thumbnailUrl = "")
++
++    private fun render(size: Int, ready: Boolean = true, play: () -> Unit = {}, signIn: (String, () -> Unit) -> Unit = { _, _ -> }) {
++        compose.setContent {
++            MaterialTheme(colorScheme = darkColorScheme()) {
++                Box(Modifier.size(size.dp)) {
++                    WatchContent(
++                        metadata = song, playing = false, ready = ready, canNext = true,
++                        canPrevious = true, buffering = false, playbackError = null,
++                        inLibrary = false, downloadState = null,
++                        library = listOf(song), downloads = emptyList(), search = WatchSearchState(),
++                        recommendations = WatchRecommendationsState(listOf(song)), onRefreshRecommendations = {},
++                        onSearch = {}, onLoadMore = {}, onRetry = {}, onPlay = { _, _ -> play() },
++                        onTogglePlayback = play, onPrevious = {}, onNext = {}, onSave = {}, onDownload = {},
++                        onSignIn = signIn,
++                    )
++                }
++            }
++        }
++    }
++
++    @Test fun `40 mm watch shows tappable playback controls`() {
++        var clicks = 0
++        render(192, play = { clicks++ })
++        compose.onNodeWithContentDescription("Play", useUnmergedTree = true).assertIsDisplayed().performClick()
++        assertEquals(1, clicks)
++        compose.onNodeWithContentDescription("Previous").assertIsDisplayed()
++        compose.onNodeWithContentDescription("Next").assertIsDisplayed()
++        screenshot("watch7-40mm.png")
++    }
++
++    @Test @Config(qualifiers = "w213dp-h213dp-round")
++    fun `44 mm watch can browse library and select a song`() {
++        var clicks = 0
++        render(213, play = { clicks++ })
++        screenshot("watch7-44mm.png")
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Library"))
++        compose.onNodeWithText("Library").performClick()
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Test song with a long title"))
++        compose.onNodeWithText("Test song with a long title").performClick()
++        assertEquals(1, clicks)
++        compose.onNodeWithContentDescription("Play").assertIsDisplayed()
++    }
++
++    @Test fun `playback is disabled until the service is ready`() {
++        render(192, ready = false)
++        compose.onNodeWithContentDescription("Play").assertIsNotEnabled()
++    }
++
++    @Test fun `watch quick picks plays the official recommendations`() {
++        var clicks = 0
++        render(192, play = { clicks++ })
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Quick picks"))
++        compose.onNodeWithText("Quick picks").performClick()
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Play all"))
++        compose.onNodeWithText("Play all").performClick()
++        assertEquals(1, clicks)
++        compose.onNodeWithContentDescription("Play").assertIsDisplayed()
++    }
++
++    @Test fun `watch imports its own account token through the account page`() {
++        val token = "***INNERTUBE COOKIE*** =SAPISID=test-session\n***VISITOR DATA*** =test-visitor"
++        var imported = ""
++        render(192, signIn = { value, done -> imported = value; done() })
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Account"))
++        compose.onNodeWithText("Account").performClick()
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Save"))
++        compose.onNodeWithText("Save").assertIsNotEnabled()
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Log in with token"))
++        compose.onNodeWithText("Log in with token").performTextInput(token)
++        compose.onNode(hasScrollToIndexAction()).performScrollToNode(hasText("Save"))
++        compose.onNodeWithText("Save").performClick()
++        assertEquals(token, imported)
++    }
++
++    private fun screenshot(name: String) {
++        val file = File("build/reports/watch7", name)
++        file.parentFile!!.mkdirs()
++        file.outputStream().use {
++            compose.onRoot().captureToImage().asAndroidBitmap().compress(Bitmap.CompressFormat.PNG, 100, it)
++        }
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchLoginTokenTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchLoginTokenTest.kt
+new file mode 100644
+index 00000000..0ef278fd
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchLoginTokenTest.kt
+@@ -0,0 +1,34 @@
++package com.metrolist.music.ui.screens.watch
++
++import org.junit.Assert.*
++import org.junit.Test
++
++class WatchLoginTokenTest {
++    private val text = """
++        ***INNERTUBE COOKIE*** =SAPISID=test-session; OTHER=embedded=value
++        ***VISITOR DATA*** =test-visitor
++        ***DATASYNC ID*** =test-channel
++        ***AUTH USER*** =1
++        ***ACCOUNT NAME*** =Watch account
++    """.trimIndent()
++
++    @Test fun `imports existing Metrolist token format without losing equals signs`() {
++        val token = parseWatchLoginToken(text)!!
++        assertEquals("SAPISID=test-session; OTHER=embedded=value", token.cookie)
++        assertEquals("test-visitor", token.visitorData)
++        assertEquals("test-channel", token.dataSyncId)
++        assertEquals("1", token.authUser)
++        assertEquals("Watch account", token.accountName)
++        assertFalse(token.toString().contains("test-session"))
++    }
++
++    @Test fun `rejects malformed credentials and ambiguous duplicate fields`() {
++        assertNull(parseWatchLoginToken(""))
++        assertNull(parseWatchLoginToken(text.replace("SAPISID=test-session", "OTHER=test")))
++        assertNull(parseWatchLoginToken(text.replace("test-visitor", "")))
++        assertNull(parseWatchLoginToken(text.replace("***AUTH USER*** =1", "***AUTH USER*** =not-a-number")))
++        assertNull(parseWatchLoginToken(text + "\n***INNERTUBE COOKIE*** =SAPISID=duplicate"))
++        assertNull(parseWatchLoginToken(text + "\u0000"))
++        assertNull(parseWatchLoginToken("x".repeat(32_769)))
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchPlaybackCapabilitiesTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchPlaybackCapabilitiesTest.kt
+new file mode 100644
+index 00000000..93ab8242
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchPlaybackCapabilitiesTest.kt
+@@ -0,0 +1,34 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.content.Context
++import android.content.pm.PackageManager
++import androidx.test.core.app.ApplicationProvider
++import com.metrolist.innertubex.extraction.strategy.PoTokenProviderKind
++import com.metrolist.music.utils.InnerTubeXPlayer
++import org.junit.Assert.assertFalse
++import org.junit.Assert.assertTrue
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [33], application = android.app.Application::class)
++class WatchPlaybackCapabilitiesTest {
++    @Test fun `watch playback does not require a WebView provider`() {
++        val context = ApplicationProvider.getApplicationContext<Context>()
++        shadowOf(context.packageManager).setSystemFeature(PackageManager.FEATURE_WATCH, true)
++        val capabilities = InnerTubeXPlayer.tokenCapabilities(context)
++        assertFalse(capabilities.usesWebView)
++        assertTrue(capabilities.providers.isEmpty())
++    }
++
++    @Test fun `phone playback retains its existing token provider`() {
++        val context = ApplicationProvider.getApplicationContext<Context>()
++        shadowOf(context.packageManager).setSystemFeature(PackageManager.FEATURE_WATCH, false)
++        val capabilities = InnerTubeXPlayer.tokenCapabilities(context)
++        assertTrue(capabilities.usesWebView)
++        assertTrue(PoTokenProviderKind.WEB_BOTGUARD in capabilities.providers)
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModelTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModelTest.kt
+new file mode 100644
+index 00000000..1e1735da
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchRecommendationsViewModelTest.kt
+@@ -0,0 +1,61 @@
++package com.metrolist.music.ui.screens.watch
++
++import com.metrolist.innertube.models.SongItem
++import com.metrolist.innertube.pages.HomePage
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.CompletableDeferred
++import kotlinx.coroutines.NonCancellable
++import kotlinx.coroutines.withContext
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.test.StandardTestDispatcher
++import kotlinx.coroutines.test.advanceUntilIdle
++import kotlinx.coroutines.test.resetMain
++import kotlinx.coroutines.test.runTest
++import kotlinx.coroutines.test.setMain
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++
++@OptIn(ExperimentalCoroutinesApi::class)
++class WatchRecommendationsViewModelTest {
++    private val dispatcher = StandardTestDispatcher()
++    @Before fun setUp() { Dispatchers.setMain(dispatcher) }
++    @After fun tearDown() { Dispatchers.resetMain() }
++
++    @Test fun `watch uses official list and preserves it when refreshing offline`() = runTest(dispatcher) {
++        val song = SongItem("official", "Official recommendation", emptyList(), thumbnail = "cover")
++        var result = Result.success(HomePage(null, listOf(HomePage.Section("猜你喜欢", null, null, null, listOf(song)))))
++        var calls = 0
++        val model = WatchRecommendationsViewModel { calls++; result }
++        model.refresh("Quick picks")
++        model.refresh("Quick picks")
++        advanceUntilIdle()
++        assertEquals(1, calls)
++        assertEquals(listOf("official"), model.state.songs.map { it.id })
++        result = Result.failure(IllegalStateException("offline"))
++        model.refresh("Quick picks")
++        advanceUntilIdle()
++        assertTrue(model.state.failed)
++        assertFalse(model.state.loading)
++        assertEquals(listOf("official"), model.state.songs.map { it.id })
++        result = Result.success(HomePage(null, emptyList()))
++        model.refresh("Quick picks")
++        advanceUntilIdle()
++        assertTrue(model.state.songs.isEmpty())
++        assertFalse(model.state.failed)
++    }
++
++    @Test fun `account change discards a late response from the previous account`() = runTest(dispatcher) {
++        val response = CompletableDeferred<Result<HomePage>>()
++        val model = WatchRecommendationsViewModel { withContext(NonCancellable) { response.await() } }
++        model.refresh("Quick picks")
++        testScheduler.runCurrent()
++        model.reset()
++        val old = SongItem("old-account", "Previous account", emptyList(), thumbnail = "cover")
++        response.complete(Result.success(HomePage(null, listOf(HomePage.Section("Quick picks", null, null, null, listOf(old))))))
++        advanceUntilIdle()
++        assertTrue(model.state.songs.isEmpty())
++        assertFalse(model.state.loading)
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModelTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModelTest.kt
+new file mode 100644
+index 00000000..0cfd094b
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchSearchViewModelTest.kt
+@@ -0,0 +1,78 @@
++package com.metrolist.music.ui.screens.watch
++
++import com.metrolist.innertube.models.SongItem
++import com.metrolist.innertube.pages.SearchResult
++import kotlinx.coroutines.CompletableDeferred
++import kotlinx.coroutines.Dispatchers
++import kotlinx.coroutines.ExperimentalCoroutinesApi
++import kotlinx.coroutines.NonCancellable
++import kotlinx.coroutines.test.StandardTestDispatcher
++import kotlinx.coroutines.test.advanceUntilIdle
++import kotlinx.coroutines.test.resetMain
++import kotlinx.coroutines.test.runTest
++import kotlinx.coroutines.test.setMain
++import kotlinx.coroutines.withContext
++import org.junit.After
++import org.junit.Assert.*
++import org.junit.Before
++import org.junit.Test
++
++@OptIn(ExperimentalCoroutinesApi::class)
++class WatchSearchViewModelTest {
++    private val dispatcher = StandardTestDispatcher()
++
++    @Before fun setUp() { Dispatchers.setMain(dispatcher) }
++    @After fun tearDown() { Dispatchers.resetMain() }
++
++    private fun song(id: String) = SongItem(id, id, emptyList(), thumbnail = "")
++
++    @Test fun `blank searches do not access the network`() = runTest(dispatcher) {
++        var calls = 0
++        val model = WatchSearchViewModel(searchSongs = { calls++; Result.success(SearchResult(emptyList())) })
++        model.search("   ")
++        advanceUntilIdle()
++        assertEquals(0, calls)
++        assertFalse(model.state.loading)
++    }
++
++    @Test fun `pagination preserves songs and retries a failed page without duplicates`() = runTest(dispatcher) {
++        var fail = true
++        val model = WatchSearchViewModel(
++            searchSongs = { Result.success(SearchResult(listOf(song("one")), "next")) },
++            nextPage = {
++                assertEquals("next", it)
++                if (fail) Result.failure(IllegalStateException("offline"))
++                else Result.success(SearchResult(listOf(song("one"), song("two"))))
++            },
++        )
++        model.search(" song ")
++        advanceUntilIdle()
++        assertEquals("song", model.state.query)
++        model.loadMore()
++        advanceUntilIdle()
++        assertTrue(model.state.failed)
++        assertEquals(listOf("one"), model.state.songs.map { it.id })
++        fail = false
++        model.retry()
++        advanceUntilIdle()
++        assertEquals(listOf("one", "two"), model.state.songs.map { it.id })
++        assertNull(model.state.continuation)
++        assertFalse(model.state.failed)
++    }
++
++    @Test fun `a late response cannot replace a newer search`() = runTest(dispatcher) {
++        val oldResponse = CompletableDeferred<Result<SearchResult>>()
++        val model = WatchSearchViewModel(searchSongs = { query ->
++            if (query == "old") withContext(NonCancellable) { oldResponse.await() }
++            else Result.success(SearchResult(listOf(song("new"))))
++        })
++        model.search("old")
++        testScheduler.runCurrent()
++        model.search("new")
++        testScheduler.runCurrent()
++        oldResponse.complete(Result.success(SearchResult(listOf(song("old")))))
++        advanceUntilIdle()
++        assertEquals(listOf("new"), model.state.songs.map { it.id })
++        assertEquals("new", model.state.query)
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchStartupTest.kt b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchStartupTest.kt
+new file mode 100644
+index 00000000..1456f0f1
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/ui/screens/watch/WatchStartupTest.kt
+@@ -0,0 +1,60 @@
++package com.metrolist.music.ui.screens.watch
++
++import android.content.pm.PackageManager
++import android.content.ComponentName
++import android.os.Looper
++import androidx.activity.compose.setContent
++import androidx.compose.material3.Text
++import androidx.lifecycle.viewmodel.compose.viewModel
++import androidx.test.core.app.ApplicationProvider
++import com.metrolist.music.App
++import com.metrolist.music.MainActivity
++import com.metrolist.music.playback.MusicService
++import com.metrolist.music.utils.InnerTubeXPlayer
++import org.junit.Assert.assertNotNull
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.Robolectric
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.Shadows.shadowOf
++import org.robolectric.annotation.Config
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [34, 36], application = App::class, qualifiers = "w192dp-h192dp-round-watch")
++class WatchStartupTest {
++    @Test fun `watch playback service initializes when its controller cannot bind`() {
++        val application = ApplicationProvider.getApplicationContext<App>()
++        shadowOf(application.packageManager).setSystemFeature(PackageManager.FEATURE_WATCH, true)
++        InnerTubeXPlayer.initialize(application)
++        shadowOf(application).declareComponentUnbindable(ComponentName(application, MusicService::class.java))
++        val controller = Robolectric.buildService(MusicService::class.java).create()
++        try {
++            assertNotNull(controller.get().player)
++        } finally {
++            controller.destroy()
++        }
++    }
++
++    @Test fun `watch activity creates view models through its production Hilt factory`() {
++        val application = ApplicationProvider.getApplicationContext<App>()
++        shadowOf(application.packageManager).setSystemFeature(PackageManager.FEATURE_WATCH, true)
++        val controller = Robolectric.buildActivity(MainActivity::class.java).setup()
++        try {
++            var search: WatchSearchViewModel? = null
++            var recommendations: WatchRecommendationsViewModel? = null
++            var account: WatchAccountViewModel? = null
++            controller.get().setContent {
++                search = viewModel()
++                recommendations = viewModel()
++                account = viewModel()
++                Text("Watch startup")
++            }
++            shadowOf(Looper.getMainLooper()).idle()
++            assertNotNull(search)
++            assertNotNull(recommendations)
++            assertNotNull(account)
++        } finally {
++            controller.pause().stop().destroy()
++        }
++    }
++}
+diff --git a/app/src/test/kotlin/com/metrolist/music/utils/CrashReportStorageTest.kt b/app/src/test/kotlin/com/metrolist/music/utils/CrashReportStorageTest.kt
+new file mode 100644
+index 00000000..c5b7d1c9
+--- /dev/null
++++ b/app/src/test/kotlin/com/metrolist/music/utils/CrashReportStorageTest.kt
+@@ -0,0 +1,37 @@
++package com.metrolist.music.utils
++
++import android.app.Application
++import android.content.ContextWrapper
++import androidx.test.core.app.ApplicationProvider
++import org.junit.Assert.*
++import org.junit.Test
++import org.junit.runner.RunWith
++import org.robolectric.RobolectricTestRunner
++import org.robolectric.annotation.Config
++import java.io.File
++
++@RunWith(RobolectricTestRunner::class)
++@Config(sdk = [36], application = Application::class)
++class CrashReportStorageTest {
++    @Test fun `crash is saved in an app external folder and the latest report replaces the old one`() {
++        val app = ApplicationProvider.getApplicationContext<Application>()
++        val expected = File(app.getExternalFilesDir(null), "crash-reports/latest-crash.txt")
++        val file = CrashHandler.persistCrashLog(app, "first exception")
++        assertEquals(expected, file)
++        assertEquals("first exception", expected.readText())
++        assertEquals(expected, CrashHandler.persistCrashLog(app, "second exception\nCaused by: test"))
++        assertEquals("second exception\nCaused by: test", expected.readText())
++        assertEquals(expected, CrashHandler.savedCrashLog(app))
++    }
++
++    @Test fun `internal storage is used if external app storage is unavailable`() {
++        val app = ApplicationProvider.getApplicationContext<Application>()
++        val context = object : ContextWrapper(app) {
++            override fun getExternalFilesDir(type: String?): File? = null
++        }
++        val expected = File(app.noBackupFilesDir, "crash-reports/latest-crash.txt")
++        assertEquals(expected, CrashHandler.persistCrashLog(context, "exception without external storage"))
++        assertEquals("exception without external storage", expected.readText())
++        assertEquals(expected, CrashHandler.savedCrashLog(context))
++    }
++}

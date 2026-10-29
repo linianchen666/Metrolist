@@ -1,0 +1,18 @@
+Watch7 启动崩溃诊断版
+
+此包只增加取日志能力，并非已确认修复启动崩溃。与上一版测试包同包名、同签名、同版本代码，可直接覆盖安装，无需卸载。
+
+1. 在 WearOS 工具箱中选择「安装 APK」，安装 Metrolist-Watch7-CrashDiagnostics-debug.apk。
+2. 在手表重新打开 Metrolist，触发一次原来的崩溃。安装诊断版之前的崩溃无法补存。
+3. 在工具箱「文件管理」中进入：
+/sdcard/Android/data/com.metrolist.music.debug/files/crash-reports/latest-crash.txt
+
+如果文件管理从内部存储根目录开始，可按 Android → data → com.metrolist.music.debug → files → crash-reports 查找。
+等价完整路径通常为 /storage/emulated/0/Android/data/com.metrolist.music.debug/files/crash-reports/latest-crash.txt。
+
+4. 将 latest-crash.txt 下载到手机，再作为文件发回聊天。只保留最近一次崩溃报告。
+5. 若工具箱不允许进入 Android/data，可在新版手表崩溃页向下滚动，拍下 Exception 和 Caused by 所在段落；新版使用黑色圆屏布局和文字自动换行。
+
+若外部应用存储不可用，日志会退回应用内部存储；崩溃页会显示实际保存路径。导出内部存储可能受文件管理工具权限限制。
+
+验证：构建和 263 项测试通过；诊断包签名及与上一版包的覆盖兼容条件已检查。未在该三星设备上复现根因，仍需实际崩溃日志。
