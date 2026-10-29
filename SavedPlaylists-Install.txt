@@ -1,0 +1,20 @@
+Metrolist Watch7 账号歌单与下载
+
+手表：用WearOS工具箱安装Metrolist-Watch7-SavedPlaylists-debug.apk。
+手机：Metrolist-Phone-SavedPlaylists-debug.apk。
+与之前测试包同包名com.metrolist.music.debug、签名和版本代码153，可覆盖安装，保留已有登录及数据，无需卸载。
+
+手表使用方法：
+1. 打开底部音乐库，进入Account playlists（账号歌单），可查看已保存歌单和Liked songs（喜欢的音乐）。
+2. 点歌单，联网获取完整歌曲列表。支持全部播放和单曲播放。
+3. 点Download all（全部下载），或点歌曲右侧下载图标。下载由手表执行，保存在手表中。
+4. 显示已完成/总数；已完成或正在下载的歌曲会跳过，失败或停止的任务可重试。
+5. 下载完成后，从音乐库→已下载打开本地歌曲，断网也可播放。账号歌单列表及歌单详情的重新读取仍需要网络；离线歌曲集中显示在“已下载”，本次未增加离线歌单分组。
+6. 账号歌单加载失败时点重试/刷新。若不是期望的歌单，请核对手表登录账号及YouTube频道。
+
+继续保留手机版风格圆屏界面、文件登录、小组件服务缺失的崩溃修复。
+无需重新导入登录文件。账号切换或退出会清除内存中的旧账号歌单；已下载文件仍保留在手表。
+
+构建及自动化测试通过，但开发环境没有用户的真实账号/手表，实际云歌单及网络下载离线播放需真机确认。
+完整源码补丁基于876e355181fd3b04e7063b10442fef1b721d53b3。补丁不含签名密钥。
+Java21/SDK37；手机bash ./gradlew :app:assembleFossDebug；手表增加METROLIST_WEAR_ONLY=true METROLIST_APP_NAME='Metrolist Watch'。
