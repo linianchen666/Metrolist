@@ -1,0 +1,23 @@
+Metrolist 手机风格手表界面 + 文件登录
+
+手机：Metrolist-Phone-PhoneStyle-debug.apk。
+手表：Metrolist-Watch7-PhoneStyle-debug.apk，通过 WearOS 工具箱“安装 APK”覆盖安装。
+同此前测试包包名 com.metrolist.music.debug、签名、版本代码153，保留数据，无需卸载。
+
+手表默认首页为猜你喜欢，采用带封面的歌曲列表、首页/搜索/音乐库底部导航、迷你播放器及封面播放页，并保留圆屏边距和旋转表圈滚动。
+继续保留小组件服务为空的启动崩溃修复、独立播放、搜索和下载功能。
+
+简化登录（已有手表登录可继续使用，无需重新导入）：
+1. 手机上安装本次手机版，在账号设置登录手表希望使用的账号。
+2. 账号设置点 Export watch login file（导出手表登录文件），保存 Metrolist-login.txt。
+3. 用 WearOS 工具箱的文件管理将文件复制到手表目录：
+   /sdcard/Android/data/com.metrolist.music.debug/files/
+   文件全路径必须为 /sdcard/Android/data/com.metrolist.music.debug/files/Metrolist-login.txt。
+4. 手表首页点账号图标，点 Import login file（导入登录文件）。成功后刷新猜你喜欢，并删除手表上的传输文件。
+5. 删除手机上导出的文件；文件包含登录凭据，请勿公开上传或分享给别人。
+手表保存独立账号，后续不会自动同步手机账号变更。手动令牌输入保留为高级入口。
+若使用不同账号，可在导出后将手机切回原账号。
+
+构建和自动化测试已验证，尚待 Galaxy Watch7 真机验证布局、文件管理传输和实际登录播放。
+完整源码补丁基于876e355181fd3b04e7063b10442fef1b721d53b3；补丁不包含签名密钥。
+Java21 / Android SDK37。手机 bash ./gradlew :app:assembleFossDebug；手表增加 METROLIST_WEAR_ONLY=true METROLIST_APP_NAME='Metrolist Watch'。
