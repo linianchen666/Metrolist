@@ -1,0 +1,5 @@
+56fd1200a48fa8c9ad1ba28c8874f671766bea9ab112555cc82476255a7fa3a7  Metrolist-Phone-QuickPicks-v2-debug.apk
+8f629215fd0b88a4845540faa21b3867d5bc7b7b777e04fd8dee0c327d9fcd3f  Metrolist-Watch7-QuickPicks-v2-debug.apk
+27c58e15214fa77af40b998efebb18bb2a8103fb8b05969d80dd9a73c9b41fcf  QuickPicks-v2-Install.txt
+6e04cc6092790387b59766945adebc14602b3c54d21c03e898991999def659e9  Metrolist-QuickPicks-v2-source.patch
+27a3353fb48a7c67f428cebf0834937f4afc78a5ca5edce681ad1bffcfd9a610  QuickPicks-v2-upgrade-check.json

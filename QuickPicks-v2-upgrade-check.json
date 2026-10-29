@@ -1,0 +1,20 @@
+[
+  {
+    "device": "Phone",
+    "package": "com.metrolist.music.debug",
+    "old_version_code": 153,
+    "new_version_code": 153,
+    "same_signing_certificate": true,
+    "signing_sha256": "1c003cd72ed9fff0d83d94021474c1cf79c46f861a7ebc9b472f3f3a2a4e6213",
+    "compatible_with_previous_test_package": true
+  },
+  {
+    "device": "Watch7",
+    "package": "com.metrolist.music.debug",
+    "old_version_code": 153,
+    "new_version_code": 153,
+    "same_signing_certificate": true,
+    "signing_sha256": "1c003cd72ed9fff0d83d94021474c1cf79c46f861a7ebc9b472f3f3a2a4e6213",
+    "compatible_with_previous_test_package": true
+  }
+]
