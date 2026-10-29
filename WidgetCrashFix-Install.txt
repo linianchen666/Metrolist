@@ -1,0 +1,15 @@
+Metrolist 手机 / Galaxy Watch7 启动崩溃修复版
+
+原因：手表不提供 AppWidgetManager 服务，原后台刷新调用空服务导致启动崩溃。
+修复：缺少服务时跳过小组件监听及刷新；手机具备服务时保留原刷新行为。
+已包含移除快速访问、原位置显示 YouTube Music 猜你喜欢、手表独立播放及账号导入。
+
+手机：安装 Metrolist-Phone-WidgetCrashFix-debug.apk。
+手表：用 WearOS 工具箱的安装 APK 功能安装 Metrolist-Watch7-WidgetCrashFix-debug.apk。
+与此前提供的测试包同包名 com.metrolist.music.debug、同签名、同版本代码153，可直接覆盖安装，保留数据，无需卸载。
+尚未在用户的三星手表实机验证。安装后重新打开应用，确认可进入首页并尝试播放。
+若仍崩溃，最新报告路径：/sdcard/Android/data/com.metrolist.music.debug/files/crash-reports/latest-crash.txt。
+
+完整源码补丁基于 876e355181fd3b04e7063b10442fef1b721d53b3，应用补丁后构建。
+Java21 / Android SDK37；手机 bash ./gradlew :app:assembleFossDebug；手表增加 METROLIST_WEAR_ONLY=true METROLIST_APP_NAME='Metrolist Watch'。
+覆盖安装依赖原有签名密钥，补丁不含签名密钥。
