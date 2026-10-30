@@ -1,0 +1,17 @@
+Metrolist 部分歌曲取流兼容修复
+
+手机安装Metrolist-Phone-PlaybackStreamFix-debug.apk；手表可选安装Metrolist-Watch7-PlaybackStreamFix-debug.apk。
+与此前测试包同包名com.metrolist.music.debug、同签名、版本代码153，可覆盖安装，保留登录、歌单和下载文件，无需卸载。
+
+更新内容：
+- InnerTubeX从v0.11.0升级到v0.11.2，相关QuackJS运行库升级到0.1.2。
+- 修复部分ES6播放脚本的备用处理路径，以及n参数处理中缺少Math运算支持的问题。
+- 取流失败不再只显示未知错误，而显示没有可用音频流。
+- 切歌时更新来源标记；复制错误报告时，取流失败明确标记Not resolved，附失败原因和各来源尝试结果，避免误报上一首歌的来源。诊断字段不包含用户代理或带签名的流URL。
+- 保留首页滑动优化、猜你喜欢、手表账号歌单和下载、圆屏界面、文件登录。
+
+旧依赖在两个兼容性回归测试中均失败，新依赖通过。两端构建及292项自动化测试通过。
+云环境无法访问YouTube，无法确认用户账号、网络和地区下的实际播放结果；请覆盖安装后重试之前失败的歌曲。若仍失败，请复制新版完整报告继续排查。
+
+完整源码补丁基于876e355181fd3b04e7063b10442fef1b721d53b3，补丁不含签名密钥。
+Java21/SDK37。手机bash ./gradlew :app:assembleFossDebug；手表增加METROLIST_WEAR_ONLY=true METROLIST_APP_NAME='Metrolist Watch'。
